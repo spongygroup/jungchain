@@ -10,6 +10,8 @@ dotenvConfig({ override: true });
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { getCity, TZ_LANGUAGES, config } from '../config.js';
 import { find as findTz } from 'geo-tz';
+import fs from 'fs';
+import path from 'path';
 
 // ─── Config ───
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
@@ -282,8 +284,8 @@ async function generateImage(description: string): Promise<Buffer | null> {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          instances: [{ prompt: `Photo-realistic image: ${description}` }],
-          parameters: { sampleCount: 1, aspectRatio: '1:1' },
+          instances: [{ prompt: `Casual phone photo, slightly imperfect: ${description}. Shot on smartphone, natural lighting, everyday life moment.` }],
+          parameters: { sampleCount: 1, aspectRatio: ['1:1', '3:4', '4:3', '9:16'][Math.floor(Math.random() * 4)] },
         }),
       }
     );
@@ -326,21 +328,43 @@ async function generateVirtualPhoto(
   lang: string,
   mission: string,
   previousCaption: string | null,
+  previousImage?: Buffer | null,
+  blockIndex: number = 0,
 ): Promise<{ caption: string; imageDescription: string }> {
   const context = previousCaption ? `Previous user's caption: "${previousCaption}"` : 'This is the first photo in the chain.';
+  
+  const parts: any[] = [];
+  
+  // 직전 사진이 있으면 이미지로 전달
+  if (previousImage) {
+    parts.push({
+      inlineData: {
+        mimeType: 'image/jpeg',
+        data: previousImage.toString('base64'),
+      },
+    });
+    parts.push({ text: `📸 Mission: "${mission}"\nThis is the previous user's photo. You are #${blockIndex + 1} of 24 in the relay chain.\nLook at this photo, then respond with YOUR photo from ${city}. Write caption in ${lang}.` });
+  } else {
+    parts.push({ text: `📸 Mission: "${mission}"\nYou are #${blockIndex + 1} of 24 — the first in the chain!\nTake a quick phone photo from your everyday life in ${city}. Write caption in ${lang}.` });
+  }
+
   const result = await model.generateContent({
-    systemInstruction: `You are ${city} resident participating in a photo relay chain.
+    systemInstruction: `You are an ordinary person living in ${city}, participating in a photo relay chain.
 Mission: "${mission}"
 ${context}
 
-Write a SHORT caption (1-2 sentences) in ${lang} for the photo you would take.
-Also describe what the photo looks like in English (for image generation later).
+Your personality type (FOLLOW THIS): ${['lazy texter — super short caption, 3-5 words max, maybe just an emoji. Like a local young person who barely types.', 'enthusiastic local — 1-2 sentences, excited tone, uses local slang or expressions natural to ' + city, 'chill local — one casual sentence, no exclamation marks, dry humor typical of ' + city + ' culture', 'storyteller local — 2-3 sentences, shares a small personal story connected to daily life in ' + city][Math.floor(Math.random() * 4)]}
 
-Respond in JSON: {"caption": "your caption in ${lang}", "imageDescription": "detailed photo description in English"}
-No markdown. No *** or formatting.`,
+Write caption in ${lang}, matching your personality type above.
+Also describe the photo in English for image generation. IMPORTANT: describe a CASUAL, EVERYDAY phone photo — not professional. Think:
+- ${['close-up of an everyday object typical in ' + city + ', on a messy desk/table', 'something spotted while walking in a normal ' + city + ' neighborhood, slightly blurry', 'a quick snap of local food/drink from ' + city + ', fingers visible', 'an ordinary object at a typical home in ' + city + ', normal indoor lighting'][Math.floor(Math.random() * 4)]}
+- Imperfect framing, real life
+
+Respond in JSON: {"caption": "your caption in ${lang}", "imageDescription": "casual phone photo description in English"}
+No markdown.`,
     contents: [{
       role: 'user',
-      parts: [{ text: `Take a photo matching the mission "${mission}" from ${city}. Write caption in ${lang}.` }],
+      parts,
     }],
   });
   try {
@@ -488,6 +512,12 @@ async function run() {
   const photos: { offset: number; city: string; caption: string; fileId?: string; imageDesc?: string; imageBuffer?: Buffer }[] = [];
   const startTime = Date.now();
 
+  // ─── 로컬 저장 디렉토리 ───
+  const runId = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const saveDir = path.join(process.cwd(), 'data', 'relay-photos', runId);
+  fs.mkdirSync(saveDir, { recursive: true });
+  console.log(`💾 Saving photos to ${saveDir}`);
+
   for (let i = 0; i < 24; i++) {
     const offset = offsets[i]!;
     const city = getCity(offset);
@@ -517,52 +547,49 @@ async function run() {
       const result = await waitForHumanPhoto(previousCaption);
       if (result) {
         photos.push({ offset, city, caption: result.caption || '📸', fileId: result.fileId });
+        // 로컬 저장: Human 사진 다운로드
+        try {
+          const photoBase64 = await getPhotoBase64(result.fileId);
+          fs.writeFileSync(path.join(saveDir, `${blockNum}-${city.replace(/\//g, '-')}.jpg`), Buffer.from(photoBase64, 'base64'));
+          fs.writeFileSync(path.join(saveDir, `${blockNum}-${city.replace(/\//g, '-')}.json`), JSON.stringify({ offset, city, caption: result.caption, lang: '한국어' }, null, 2));
+        } catch (e) { console.log(`  ⚠️ Save failed: ${e}`); }
       } else {
         // AI fallback
-        const virtual = await generateVirtualPhoto(city, '한국어', MISSION, previousCaption);
+        const prevImg = photos.length > 0 ? photos[photos.length - 1].imageBuffer : null;
+        const virtual = await generateVirtualPhoto(city, '한국어', MISSION, previousCaption, prevImg, i);
         photos.push({ offset, city, caption: virtual.caption, imageDesc: virtual.imageDescription });
       }
     } else {
       // ─── AI 유저 or 정지기 ───
+      const prevImage = photos.length > 0 ? photos[photos.length - 1].imageBuffer : null;
       const virtual = await generateVirtualPhoto(
         city,
         isAi ? 'English' : lang,
         MISSION,
         previousCaption,
+        prevImage,
+        i,
       );
       // 실제 이미지 생성
       console.log(`  🎨 Generating image: ${virtual.imageDescription.slice(0, 60)}...`);
       const imageBuffer = await generateImage(virtual.imageDescription);
       if (imageBuffer) {
         photos.push({ offset, city, caption: virtual.caption, imageBuffer });
+        // 로컬 저장
+        fs.writeFileSync(path.join(saveDir, `${blockNum}-${city.replace(/\//g, '-')}.jpg`), imageBuffer);
+        fs.writeFileSync(path.join(saveDir, `${blockNum}-${city.replace(/\//g, '-')}.json`), JSON.stringify({ offset, city, caption: virtual.caption, imageDesc: virtual.imageDescription, lang }, null, 2));
       } else {
         photos.push({ offset, city, caption: virtual.caption, imageDesc: virtual.imageDescription });
       }
       console.log(`  📸 ${virtual.caption.slice(0, 50)}... (${((Date.now() - genStart) / 1000).toFixed(1)}s)`);
 
-      // ─── 진행 리포트 (사진 포함) ───
+      // ─── 진행 리포트 (텍스트만, 사진 없음) ───
       if (i === 1) {
-        // 첫 번째 다음 도시 — 사진 보여주기
-        const lastPhoto = photos[photos.length - 1];
-        if (lastPhoto.imageBuffer) {
-          await sendTelegramPhotoBuffer(lastPhoto.imageBuffer, `🌏 네 사진이 ${korCity}에 도착했어.\n"${lastPhoto.caption}"`);
-        } else {
-          await sendTelegram(`🌏 네 사진이 ${korCity}에 도착했어.\n"${lastPhoto.caption}"`);
-        }
+        await sendTelegram(`✈️ 네 사진이 다음 도시로 떠났어.\n🌍 네 사진이 ${korCity}에 도착했어.`);
       } else if (i % 5 === 0 && i > 0) {
-        const lastPhoto = photos[photos.length - 1];
-        if (lastPhoto.imageBuffer) {
-          await sendTelegramPhotoBuffer(lastPhoto.imageBuffer, `🌏 사진이 ${korCity}을 지나는 중... (${i}/24)\n"${lastPhoto.caption}"`);
-        } else {
-          await sendTelegram(`🌏 사진이 ${korCity}을 지나는 중... (${i}/24)\n"${lastPhoto.caption}"`);
-        }
+        await sendTelegram(`🌍 사진이 ${korCity}을 지나는 중... (${i}/24)`);
       } else if (i === 22) {
-        const lastPhoto = photos[photos.length - 1];
-        if (lastPhoto.imageBuffer) {
-          await sendTelegramPhotoBuffer(lastPhoto.imageBuffer, `🌏 거의 다 왔어! ${korCity}까지.\n"${lastPhoto.caption}"`);
-        } else {
-          await sendTelegram(`🌏 거의 다 왔어! ${korCity}까지.\n"${lastPhoto.caption}"`);
-        }
+        await sendTelegram(`🌍 거의 다 왔어! ${korCity}까지.`);
       }
     }
 
@@ -576,18 +603,8 @@ async function run() {
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
   console.log(`\n✅ 정체인 포토 릴레이 완주! ${elapsed}초`);
 
-  // 결과 메시지
-  let resultText = `✅ 정체인 포토 릴레이 완주!\n\n` +
-    `📸 미션: "${MISSION}"\n` +
-    `🌏 24개 도시, 24장의 사진, 하나의 미션.\n` +
-    `⏱ ${elapsed}초 | 지구 한 바퀴\n\n`;
-
-  for (const photo of photos) {
-    const flag = TZ_FLAGS[photo.offset] ?? '🌍';
-    resultText += `${flag} ${photo.city}: ${photo.caption}\n`;
-  }
-
-  await sendTelegram(resultText);
+  // 완주 메시지 (간결하게)
+  await sendTelegram(`✅ 정체인 포토 릴레이 완주!\n\n📸 미션: "${MISSION}"\n🌏 24개 도시, 24장의 사진, 하나의 미션.\n⏱ ${elapsed}초 | 지구 한 바퀴`);
 }
 
 run().catch(err => {

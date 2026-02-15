@@ -6,3 +6,6 @@ data/*.db-wal
 .env
 *.log
 tmp/
+data/relay-photos/
+data/red-chain-*
+data/*.html
