@@ -1,0 +1,9 @@
+{
+  "network": "base-sepolia",
+  "chainId": 84532,
+  "jungBlock": "0x02F2707A2a295F1BCCc3E299855300D3FFf7fD07",
+  "jungSoulbound": "0xF78fBb8647b87e76d3A81d18c93B8c909801B1df",
+  "deployer": "0x8D555CFc4B3F5FE21a3755043E80bbF4e85af1c1",
+  "deployedAt": "2026-02-16T14:13:43.279Z",
+  "version": "v4-maxNext-fork"
+}

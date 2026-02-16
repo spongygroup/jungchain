@@ -1,3 +1,6 @@
+---
+tags: [project, jung]
+---
 # 정 (Jung) — Design Document (Full)
 > "시간이 연결하는 정"
 
@@ -227,89 +230,153 @@ AI는 주인공이 아니라 **정이 끊기지 않게 지키는 존재.**
 
 ## 5. 온체인 기록: 정체인 (JungChain)
 
-### 체인 선택: Base (Coinbase L2)
+### 핵심 컨셉: Proof of 정 (Proof of Jung)
 
-**비교 분석:**
+비트코인에서 가장 긴 체인이 가장 신뢰받는 체인이듯,
+**정체인에서 가장 긴 체인은 가장 많은 정이 담긴 체인이다.**
+
+- 비트코인: 해시파워 = 작업증명 → longest chain = truth
+- **정체인: 사람의 시간과 관심 = 정증명 → longest chain = 정**
+
+### 포크와 자연선택
+
+같은 타임존 슬롯에 여러 사람이 참여하면 **체인이 갈라진다 (fork).**
+
+```
+서울(2시) ─→ 도쿄 유저A ─→ 방콕 유저C ─→ ... ─→ 24블록 완주 ✅ (메인체인)
+                  ↘ 유저B ─→ 방콕 유저D ─→ ... ─→ 18블록에서 끊김
+                                   ↘ 유저E ─→ ... ─→ 8블록에서 소멸
+```
+
+- 포크는 자연스러운 현상 — 막지 않음
+- **가장 긴 체인 = 메인 체인** (가장 많은 사람이 이어붙인 경로)
+- 짧은 포크는 자연 소멸 (기록은 남지만 메인 아님)
+- AI가 채운 체인은 짧거나 가지가 적음 → 자연스럽게 가치 낮음
+- **AI 상한이 필요 없다** — longest chain rule이 자동으로 해결
+
+### 참여 = 블록
+
+모든 참여가 온체인에 기록된다. 완주만이 아니라 **과정 전체.**
+
+```
+참여 1건 = 1 블록 = 1 트랜잭션
+```
+
+- 체인이 실시간으로 자라는 것이 온체인에서 보임
+- 끊기면 체인이 진짜 멈추는 게 보임
+- 완주하면 24개 블록이 연결된 완성된 체인
+
+### 체인 선택: Base (Coinbase L2)
 
 | 항목 | Base | Polygon PoS | Arbitrum One |
 |---|---|---|---|
 | 트랜잭션 비용 | ~$0.001 | ~$0.01 | ~$0.01~0.10 |
 | 확정 시간 | ~2초 | ~2초 | ~0.3초 |
-| 생태계 | Coinbase 연동, 소셜 앱 다수 | 가장 넓음 | DeFi 중심 |
 | 소셜/컨슈머 적합성 | ⭐⭐⭐ | ⭐⭐ | ⭐ |
 | 온보딩 편의성 | Coinbase 월렛 연동 | 별도 지갑 필요 | 별도 지갑 필요 |
 
 **선택 이유: Base**
-- 가스비가 사실상 무료 수준 ($0.001/tx) → 매일 24개 체인 기록해도 월 $0.72
-- Coinbase Smart Wallet로 가스리스 온보딩 가능 (유저가 지갑/가스비 몰라도 됨)
-- 소셜/컨슈머 앱 트렌드와 일치 (Farcaster, friend.tech 등)
-- EVM 호환 → 나중에 멀티체인 확장 용이
+- 가스비 ~$0.001/tx → 참여마다 기록해도 부담 없음
+- 24블록 × 24체인/일 = 최대 576tx = **$0.58/일, ~$17/월**
+- Coinbase Smart Wallet로 가스리스 온보딩 (유저가 지갑/가스비 몰라도 됨)
+- 소셜/컨슈머 앱 트렌드 (Farcaster, friend.tech)
+- EVM 호환 → 멀티체인 확장 용이
 
 ### 가스비 전략
 - **MVP**: 프로젝트 지갑에서 가스비 대납 (Paymaster/Account Abstraction)
-- **스케일**: 완주 체인만 온체인 기록 (하루 최대 24tx) → 월 ~$0.72
+- **스케일**: 포크 포함 전체 참여 기록 → 유저 많아지면 tx 증가하지만 Base 비용으로 감당 가능
 - **유저 부담 제로**: 유저는 블록체인을 인식하지 않음
 
 ### 스마트 컨트랙트 구조
 
 ```solidity
-// JungChainRegistry.sol
-contract JungChainRegistry {
-    struct ChainRecord {
-        bytes32 chainId;        // "2025-02-15-14h"
-        bytes32[24] blockHashes; // 각 타임존 메시지 해시
-        uint8 humanCount;       // 인간 참여 슬롯 수
-        uint8 aiCount;          // AI 참여 슬롯 수
-        uint256 completedAt;    // 완주 타임스탬프
-        bool completed;         // 완주 여부
+// JungBlock.sol — 참여 = 블록
+contract JungBlock {
+    struct Block {
+        bytes32 chainId;        // "2026-02-16-14h"
+        uint8 slotIndex;        // 타임존 슬롯 (0~23)
+        bytes32 messageHash;    // 메시지 내용 해시
+        bytes32 prevBlockHash;  // 이전 블록 해시 (체인 연결)
+        address participant;    // 참여자 지갑 (또는 0x0 = AI)
+        bool isHuman;           // 인간/AI 구분
+        uint256 timestamp;      // 참여 시각
     }
 
-    mapping(bytes32 => ChainRecord) public chains;
+    // chainId → slotIndex → Block[] (같은 슬롯에 여러 블록 = 포크)
+    mapping(bytes32 => mapping(uint8 => Block[])) public blocks;
 
-    function recordCompletion(
+    // 참여 기록 (= 블록 추가)
+    function addBlock(
         bytes32 chainId,
-        bytes32[24] calldata blockHashes,
-        uint8 humanCount,
-        uint8 aiCount
-    ) external onlyOperator { ... }
+        uint8 slotIndex,
+        bytes32 messageHash,
+        bytes32 prevBlockHash,
+        address participant,
+        bool isHuman
+    ) external onlyOperator returns (bytes32 blockHash) { ... }
+
+    // 특정 경로의 체인 길이 조회
+    function getChainLength(bytes32 chainId, bytes32 leafBlockHash) 
+        external view returns (uint8) { ... }
 }
 
-// JungSoulbound.sol (완주 NFT)
+// JungSoulbound.sol — 메인체인 완주 NFT
 contract JungSoulbound is ERC721 {
-    // Soulbound: 전송 불가
-    // 메타데이터: 체인 ID, 참여 타임존, 완주 날짜
-    function mint(address participant, bytes32 chainId) external onlyRegistry { ... }
+    // Soulbound: 전송 불가, 정은 사고팔 수 없으니까
+    // 메인체인 (longest chain) 참여자에게만 민팅
+    // 메타데이터: 체인 ID, 참여 타임존, 완주 날짜, 체인 길이
+    function mint(
+        address participant, 
+        bytes32 chainId,
+        uint8 chainLength
+    ) external onlyRegistry { ... }
 }
 ```
 
 ### 블록 구조
 ```json
 {
-  "chain_id": "2025-02-15-14h",
-  "block": 7,
+  "chain_id": "2026-02-16-14h",
+  "slot_index": 7,
   "timezone": "UTC+9",
-  "timestamp": 1739...,
   "message_hash": "0xa3f...",
-  "prev_hash": "0x8b2...",
-  "is_human": null,
-  "completed": false
+  "prev_block_hash": "0x8b2...",
+  "participant": "0x742d...",
+  "is_human": true,
+  "timestamp": 1739...,
+  "block_hash": "0xf1e..."
 }
+```
+
+### Longest Chain Rule
+
+```
+완주 판정 시 (24번째 슬롯 이후):
+1. 모든 경로(leaf → root) 추적
+2. 가장 긴 경로 = 메인 체인
+3. 동률이면: 인간 참여 비율 높은 쪽 > 먼저 완료된 쪽
+4. 메인 체인 참여자 → Soulbound NFT
+5. 포크 참여자 → 기록은 남지만 NFT 없음
 ```
 
 ### 원칙
 - **메시지 원문은 올리지 않음** — 해시만 (프라이버시)
-- 체인 존재의 증명만 온체인
+- **모든 참여가 온체인** — 과정이 곧 증명
+- **포크는 자연스러운 현상** — longest chain이 자동으로 메인 결정
+- **AI 참여도 기록** — 단, `isHuman: false`로 투명하게 구분
 - 내용은 앱/봇에서만 열람
 
 ### 완주 체인
-- 24블록 완성 → 온체인 영구 기록
-- 참여자 전원에게 완주 NFT (Soulbound — 전송 불가, 정은 사고팔 수 없으니까)
-- "나는 2025년 2월 15일, 2시 체인의 일부였다"
+- 가장 긴 경로가 24블록 도달 → 메인 체인 확정
+- 메인 체인 참여자에게 완주 NFT (Soulbound — 전송 불가)
+- "나는 2026년 2월 16일, 2시 체인의 일부였다"
+- 포크에만 참여한 유저: "여행자" 배지 (NFT 아닌 앱 내 기록)
 
 ### 정 스코어
-- 내가 이어붙인 체인 수
-- 내가 참여한 체인의 평균 길이
-- 완주 참여 횟수
+- 내가 참여한 블록 수 (온체인 누적)
+- 메인 체인 참여 횟수 (= 내 메시지가 선택받은 횟수)
+- 완주 체인 참여 횟수
+- 포크 대비 메인 체인 비율 (= 정의 정확도)
 - 온체인에 누적 → 소울바운드 프로필의 일부
 
 ---

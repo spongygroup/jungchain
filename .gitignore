@@ -9,3 +9,7 @@ tmp/
 data/relay-photos/
 data/red-chain-*
 data/*.html
+
+artifacts/
+cache/
+

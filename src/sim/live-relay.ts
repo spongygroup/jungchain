@@ -10,6 +10,12 @@ dotenvConfig({ override: true });
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { getCity, TZ_LANGUAGES, config } from '../config.js';
 import { find as findTz } from 'geo-tz';
+import { ethers } from 'ethers';
+import { makeChainId, recordBlock, mintSoulbound, explorerUrl, isChainCompleted } from '../onchain.js';
+
+function wallet_address(): string {
+  return process.env.DEPLOYER_ADDRESS || '0x8D555CFc4B3F5FE21a3755043E80bbF4e85af1c1';
+}
 
 // ─── Config ───
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
@@ -391,6 +397,15 @@ async function run() {
   const offsets = Array.from({ length: 24 }, (_, i) => 12 - i);
   const startTime = Date.now();
 
+  // ─── On-chain setup ───
+  const now = new Date();
+  const chainLabel = `${now.toISOString().slice(0, 10)}-${now.getHours()}h`;
+  const chainId = makeChainId(chainLabel);
+  let prevBlockHash = ethers.ZeroHash;
+  const blockTxHashes: string[] = [];
+  const ENABLE_ONCHAIN = process.env.ENABLE_ONCHAIN !== 'false'; // default ON
+  console.log(`⛓️  Chain ID: ${chainLabel} (onchain: ${ENABLE_ONCHAIN})`);
+
   for (let i = 0; i < 24; i++) {
     const offset = offsets[i]!;
     const city = getCity(offset);
@@ -460,6 +475,24 @@ async function run() {
 
     console.log(`  ${userLabel} ${content.slice(0, 60)}... (${genTime}s)`);
 
+    // ─── Record on-chain ───
+    if (ENABLE_ONCHAIN) {
+      try {
+        const result = await recordBlock(
+          chainId,
+          i,                    // slotIndex (0~23)
+          content,              // message content → hashed on-chain
+          prevBlockHash,        // link to previous block
+          !isAi,                // isHuman
+          isAi ? undefined : undefined, // participant address (0x0 for now)
+        );
+        prevBlockHash = result.blockHash;
+        blockTxHashes.push(result.txHash);
+      } catch (err: any) {
+        console.error(`  ⛓️  On-chain error (continuing): ${err.message?.slice(0, 80)}`);
+      }
+    }
+
     // Save for context
     messages.push(`[${city}] ${content}`);
 
@@ -483,6 +516,43 @@ async function run() {
     if (isLast) {
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
       console.log(`\n✅ 정체인 완주! ${elapsed}초 | 🌏 지구 한 바퀴`);
+
+      // On-chain completion report
+      if (ENABLE_ONCHAIN && blockTxHashes.length > 0) {
+        const humanCount = offsets.filter(o => !AI_GAPS.has(o)).length;
+        const aiCount = AI_GAPS.size;
+        const lastTx = blockTxHashes[blockTxHashes.length - 1];
+        console.log(`⛓️  Chain completed on-chain! ${blockTxHashes.length} blocks, ${humanCount} humans, ${aiCount} AI`);
+        
+        await sendTelegram(
+          `⛓️ 온체인 기록 완료!\n\n` +
+          `• 블록 수: ${blockTxHashes.length}/24\n` +
+          `• 인간: ${humanCount} | AI 정지기: ${aiCount}\n` +
+          `• 네트워크: Base Sepolia\n` +
+          `• 마지막 tx: ${explorerUrl(lastTx)}\n\n` +
+          `Proof of 정 — 가장 긴 체인이 가장 많은 정.`
+        );
+
+        // Mint Soulbound NFT for deployer (demo — real service would mint per participant)
+        try {
+          const { tokenId, txHash } = await mintSoulbound(
+            wallet_address(),
+            chainId,
+            offsets.indexOf(userLocation.tz), // user's slot
+            24,                                // chain length
+            humanCount,
+          );
+          await sendTelegram(
+            `🎖️ Soulbound NFT #${tokenId} 민팅 완료!\n\n` +
+            `"나는 ${chainLabel} 체인의 일부였다"\n` +
+            `전송 불가 — 정은 사고팔 수 없으니까.\n\n` +
+            `${explorerUrl(txHash)}`
+          );
+        } catch (err: any) {
+          console.error(`  🎖️ NFT mint error: ${err.message?.slice(0, 80)}`);
+        }
+      }
+
       console.log('🔄 Translating full story to Korean...');
       const fullTranslation = await translateContext(messages, '한국어');
       await sendTelegram(
