@@ -72,7 +72,11 @@ Hygge(덴마크)가 "공간의 따뜻함"을 세계에 알렸듯이,
 - 시작 메시지: AI 정지기가 시간/날씨/분위기 기반 seed 메시지 생성 (또는 전날 완주 체인에서 이어받기)
 
 **진행:**
-- 한 타임존에서 복수 유저가 참여 가능 → 가장 먼저 제출된 1개만 체인에 포함
+- - 같은 타임존에서 여러 유저가 참여 → 포크 발생 (N값에 따라)
+- 1:N 포크 구조로 변경 (가장 먼저 제출된 1개만 체인에 포함 이라는 문구는 삭제됨)
+- 타임존별 "참여 대기 풀" 개념 추가
+- 실제 매칭 수 = min(N, 풀에 남은 사람)
+- 풀에 0명이면 정지기 대체
 - 나머지는 "보너스 정" — 체인에 직접 포함되지 않지만 별도 스레드로 열람 가능
 - 유저는 하루에 **최대 3개 체인**에 참여 가능 (무료 기준 1개)
 - 같은 시간대에 여러 체인이 "통과" 가능 → 예: 서울 UTC+9 기준, 2시 체인이 지나갈 때 동시에 1시 체인도 아직 열려있을 수 있음 (각 체인은 독립적)
@@ -289,49 +293,18 @@ AI는 주인공이 아니라 **정이 끊기지 않게 지키는 존재.**
 
 ### 스마트 컨트랙트 구조
 
-```solidity
-// JungBlock.sol — 참여 = 블록
-contract JungBlock {
-    struct Block {
-        bytes32 chainId;        // "2026-02-16-14h"
-        uint8 slotIndex;        // 타임존 슬롯 (0~23)
-        bytes32 messageHash;    // 메시지 내용 해시
-        bytes32 prevBlockHash;  // 이전 블록 해시 (체인 연결)
-        address participant;    // 참여자 지갑 (또는 0x0 = AI)
-        bool isHuman;           // 인간/AI 구분
-        uint256 timestamp;      // 참여 시각
-    }
+현재 컨트랙트 구조 반영:
+- JungBlock v4.3 (0x02F2707A2a295F1BCCc3E299855300D3FFf7fD07)
+- JungSoulbound (0xF78fBb8647b87e76d3A81d18c93B8c909801B1df)
+- createChain() — 체인 등록 (creator 주소 기록)
+- addBlock() — maxNext 파라미터 (1:N 포크)
+- setMaxNextLimit() — fork 상한 온체인 변경
+- hasParticipated — 같은 체인+슬롯 중복 참여 차단
+- forkCount — prev 블록의 maxNext 제한 강제
+- onlyOperator — 서버가 게이트키퍼 (유저 지갑 주소는 participant로 기록)
+- CDP Server Wallet — 유저별 지갑 자동 생성 (Coinbase Developer Platform)
+- 유저는 지갑/가스비 불필요. 서버가 대신 트랜잭션 전송
 
-    // chainId → slotIndex → Block[] (같은 슬롯에 여러 블록 = 포크)
-    mapping(bytes32 => mapping(uint8 => Block[])) public blocks;
-
-    // 참여 기록 (= 블록 추가)
-    function addBlock(
-        bytes32 chainId,
-        uint8 slotIndex,
-        bytes32 messageHash,
-        bytes32 prevBlockHash,
-        address participant,
-        bool isHuman
-    ) external onlyOperator returns (bytes32 blockHash) { ... }
-
-    // 특정 경로의 체인 길이 조회
-    function getChainLength(bytes32 chainId, bytes32 leafBlockHash) 
-        external view returns (uint8) { ... }
-}
-
-// JungSoulbound.sol — 메인체인 완주 NFT
-contract JungSoulbound is ERC721 {
-    // Soulbound: 전송 불가, 정은 사고팔 수 없으니까
-    // 메인체인 (longest chain) 참여자에게만 민팅
-    // 메타데이터: 체인 ID, 참여 타임존, 완주 날짜, 체인 길이
-    function mint(
-        address participant, 
-        bytes32 chainId,
-        uint8 chainLength
-    ) external onlyRegistry { ... }
-}
-```
 
 ### 블록 구조
 ```json
@@ -518,34 +491,17 @@ contract JungSoulbound is ERC721 {
 
 ## 9. 수익 모델
 
-### 무료
-- 하루 1개 체인 참여
-- 기본 체인 열람 (최근 3일)
-- 일간 알림
+3단계 과금 구조:
+1. 참여 (블록 추가) = 무료
+2. 포크 확장 (maxNext 2~5) = 유료 (매 턴마다 설정 가능)
+3. 체인 생성 = 프리미엄 (가장 비쌈)
 
-### 프리미엄 ($4.99/월 or $39.99/년)
-- 무제한 체인 참여 (최대 하루 5개)
-- AI 정지기 리포트 (주간/월간 회고)
-- 완주 체인 NFT 민팅
-- 체인 히스토리 전체 열람
-- 정 지도 (내 메시지가 닿은 도시들 시각화)
-- 특별 체인 참여 (이벤트/테마 체인)
+N값 = 내가 다음 턴에 넘길 수 있는 최대 수신자 수
+- 무료: N=1 고정
+- 유료: N=2~5 (결제 등급에 따라)
+- 가격은 서버 config로 관리 (컨트랙트 재배포 없이 변경 가능)
 
-### B2B
-- 카페/장소 스크린 설치 (정 키트)
-  - 기본: 무료 (소프트웨어) / 하드웨어는 카페 부담
-  - 프로: $29/월 (대시보드 + 분석 + 브랜딩)
-- 브랜드 체인 (기업이 시작하는 체인)
-  - 스폰서 체인: $500/체인 (브랜드 맥락 태그 포함)
-  - 시즌 파트너십: $5,000/월
-
-### 예상 ARPU
-- 무료 유저: $0 (광고 없음 — 정에 광고는 어울리지 않음)
-- 프리미엄 전환율 목표: 5~8%
-- 프리미엄 ARPU: ~$4/월
-- Blended ARPU (전체): ~$0.25/월/유저
-- B2B는 별도: 카페 10곳 × $29 = $290/월
-- **수익은 후순위. 정이 먼저.**
+체인 생성자 특전: Soulbound에 Creator 마크, 체인 이름/테마 설정 권한
 
 ---
 
@@ -579,6 +535,11 @@ contract JungSoulbound is ERC721 {
 - **CDN**: Cloudflare (미디어 캐싱)
 - **DB 스케일**: PostgreSQL read replicas + pgbouncer
 - **글로벌**: 리전별 엣지 서버 (Fly.io 멀티리전)
+
+- Coinbase CDP SDK (@coinbase/cdp-sdk)
+- CDP Server Wallet (B방식 — 유저 모름, 서버 관리)
+- CDP API Key + Wallet Secret → ~/.config/cdp/credentials.json
+- 유저별 지갑: cdp.evm.createAccount() → telegramId 매핑
 
 ### 확장성 고려
 - 10,000 유저 기준: 매 정각 최대 ~400 메시지 처리 → 단일 서버 충분

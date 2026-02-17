@@ -13,3 +13,4 @@ data/*.html
 artifacts/
 cache/
 
+.DS_Store

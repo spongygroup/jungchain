@@ -1,7 +1,7 @@
 import 'dotenv/config';
 
 export const config = {
-  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? '',
+  jungBotToken: process.env.JUNG_BOT_TOKEN ?? '',
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
   googleApiKey: process.env.GOOGLE_API_KEY ?? '',
   simMode: process.env.SIM_MODE === 'true',
