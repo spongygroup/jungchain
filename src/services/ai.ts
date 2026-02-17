@@ -103,7 +103,7 @@ export async function translateContent(
 export async function validatePhoto(
   photoBase64: string,
   mission: string,
-): Promise<{ status: 'pass' | 'mission_fail' | 'safety_fail'; description: string; userMessage: string }> {
+): Promise<{ status: 'pass' | 'mission_fail' | 'safety_fail'; description: string; userMessage: string; jungzigiComment: string }> {
   const model = getModel('gemini-2.0-flash');
 
   try {
@@ -127,7 +127,8 @@ Respond ONLY in JSON:
 {
   "status": "pass" | "mission_fail" | "safety_fail",
   "description": "brief description in English",
-  "userMessage": "friendly message to user in their language (1-2 sentences, casual, warm)"
+  "userMessage": "friendly message to user in their language (1-2 sentences, casual, warm)",
+  "jungzigiComment": "a warm, personal 1-sentence comment about the photo in the user's language — like a friend reacting to the photo (e.g. '와 이 빛 진짜 예쁘다!', 'That sky is amazing! 🌅'). Be genuine, specific to what you see."
 }`,
       contents: [{
         role: 'user',
@@ -143,7 +144,7 @@ Respond ONLY in JSON:
     return json;
   } catch (err: any) {
     console.error(`Photo validation error: ${err.message}`);
-    return { status: 'pass', description: 'validation skipped', userMessage: '확인 완료!' };
+    return { status: 'pass', description: 'validation skipped', userMessage: '확인 완료!', jungzigiComment: '좋은 사진이네요! 📸' };
   }
 }
 

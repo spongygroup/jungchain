@@ -38,6 +38,9 @@ bot.catch((err) => {
 
 // On-chain toggle
 const ENABLE_ONCHAIN = process.env.ENABLE_ONCHAIN === 'true';
+
+// Pending mission input (photo mode)
+const pendingMission = new Map<number, { mode: string; city: string; localHour: number; now: string }>();
 // Track prevBlockHash per chain (in-memory, resets on restart)
 const chainBlockHashes = new Map<number, string>();
 
@@ -138,12 +141,12 @@ bot.callbackQuery(/^hour:/, async (ctx) => {
 
   upsertUser(from.id, from.username, from.first_name, tzOffset, notifyHour, from.language_code);
 
-  // Create CDP wallet (async, non-blocking for UX)
-  createWallet().then(({ address }) => {
+  // Create or restore CDP wallet
+  createWallet(from.id).then(({ address, isNew }) => {
     setUserWallet(from.id, address);
-    console.log(`  🔑 Wallet created for ${from.id}: ${address.slice(0, 10)}...`);
+    console.log(`  🔑 Wallet ${isNew ? 'created' : 'restored'} for ${from.id}: ${address.slice(0, 10)}...`);
   }).catch(err => {
-    console.error(`  🔑 Wallet creation failed for ${from.id}: ${err.message}`);
+    console.error(`  🔑 Wallet failed for ${from.id}: ${err.message}`);
   });
 
   const sign = tzOffset >= 0 ? '+' : '';
@@ -151,6 +154,44 @@ bot.callbackQuery(/^hour:/, async (ctx) => {
     t(lang, 'setup_done', { name: from.first_name, city, sign, offset: tzOffset, hour: notifyHour })
   );
   await ctx.answerCallbackQuery('🎉');
+});
+
+// ═══════════════════════════════════════
+// DEV: TEST ONBOARDING (skip location)
+// ═══════════════════════════════════════
+
+bot.command('devstart', async (ctx) => {
+  const lang = getLang(ctx);
+  const kb = new InlineKeyboard();
+  // Show popular TZ options in rows of 4
+  const tzList = [
+    { label: '🇳🇿 +12 Auckland', offset: 12 },
+    { label: '🇦🇺 +10 Sydney', offset: 10 },
+    { label: '🇰🇷 +9 Seoul', offset: 9 },
+    { label: '🇹🇼 +8 Taipei', offset: 8 },
+    { label: '🇹🇭 +7 Bangkok', offset: 7 },
+    { label: '🇦🇪 +4 Dubai', offset: 4 },
+    { label: '🇷🇺 +3 Moscow', offset: 3 },
+    { label: '🇫🇷 +1 Paris', offset: 1 },
+    { label: '🇬🇧 0 London', offset: 0 },
+    { label: '🇧🇷 -3 São Paulo', offset: -3 },
+    { label: '🇺🇸 -5 Chicago', offset: -5 },
+    { label: '🇺🇸 -8 LA', offset: -8 },
+  ];
+  for (let i = 0; i < tzList.length; i += 3) {
+    for (const tz of tzList.slice(i, i + 3)) {
+      kb.text(tz.label, `devtz:${tz.offset}`);
+    }
+    kb.row();
+  }
+  await ctx.reply('🧪 *Dev Mode* — Pick a timezone:', { reply_markup: kb, parse_mode: 'Markdown' });
+});
+
+bot.callbackQuery(/^devtz:/, async (ctx) => {
+  const offset = Number(ctx.callbackQuery.data.split(':')[1]);
+  const city = getCity(offset);
+  await showHourPicker(ctx, offset, city);
+  await ctx.answerCallbackQuery();
 });
 
 // ═══════════════════════════════════════
@@ -179,23 +220,24 @@ bot.callbackQuery(/^new_mode:/, async (ctx) => {
 
   const now = new Date();
   const city = getCity(user.tz_offset);
-  // chain_hour = creator's local hour (floored)
   const localHour = ((now.getUTCHours() + user.tz_offset) % 24 + 24) % 24;
-  let mission: string | undefined;
 
   if (mode === 'photo') {
-    mission = '당신 주위의 아름다운 것을 보여주세요!';
+    // Ask for mission first
+    pendingMission.set(ctx.from!.id, { mode, city, localHour, now: now.toISOString() });
+    await ctx.editMessageText(t(lang, 'ask_mission'));
+    await ctx.answerCallbackQuery();
+    return;
   }
 
-  const chainId = createChain(user.telegram_id, user.tz_offset, now.toISOString(), mode, localHour, mission);
+  const chainId = createChain(user.telegram_id, user.tz_offset, now.toISOString(), mode, localHour);
   const expiresAt = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
   const assignId = createAssignment(user.telegram_id, chainId, 1, expiresAt);
 
   let promptKey = 'new_chain';
   if (mode === 'story') promptKey = 'new_story';
-  if (mode === 'photo') promptKey = 'new_photo';
 
-  await ctx.editMessageText(t(lang, promptKey, { city, max: config.maxMessageLength, mission: mission ?? '' }));
+  await ctx.editMessageText(t(lang, promptKey, { city, max: config.maxMessageLength }));
   scheduleExpiry(assignId, ctx.from!.id, 60 * 60 * 1000);
   await ctx.answerCallbackQuery();
 });
@@ -279,11 +321,29 @@ bot.callbackQuery(/^skip:/, async (ctx) => {
 
 bot.on('message:text', async (ctx) => {
   const userId = ctx.from!.id;
-  const assignment = getPendingAssignment(userId);
-  if (!assignment) return;
-
   const text = ctx.message.text.trim();
   if (text.startsWith('/')) return;
+
+  // Handle pending mission input (photo mode)
+  const missionState = pendingMission.get(userId);
+  if (missionState) {
+    pendingMission.delete(userId);
+    const lang = getLang(ctx);
+    const user = getUser(userId);
+    if (!user) return;
+
+    const mission = text;
+    const chainId = createChain(user.telegram_id, user.tz_offset, missionState.now, 'photo', missionState.localHour, mission);
+    const expiresAt = new Date(new Date(missionState.now).getTime() + 60 * 60 * 1000).toISOString();
+    const assignId = createAssignment(user.telegram_id, chainId, 1, expiresAt);
+
+    await ctx.reply(t(lang, 'new_photo', { city: missionState.city, max: config.maxMessageLength, mission }));
+    scheduleExpiry(assignId, userId, 60 * 60 * 1000);
+    return;
+  }
+
+  const assignment = getPendingAssignment(userId);
+  if (!assignment) return;
 
   const lang = getLang(ctx);
   if (text.length > config.maxMessageLength) {
@@ -293,11 +353,31 @@ bot.on('message:text', async (ctx) => {
   const user = getUser(userId);
   if (!user) return;
 
-  // Check if this is a photo mode waiting for caption
+  // Photo mode waiting for caption — redirect to caption handler
   if (assignment.mode === 'photo' && assignment.status === 'writing') {
-    // 'writing' in photo mode = waiting for caption after photo
-    // The photo URL should be stored temporarily... we handle this differently
-    // For now, treat as text block
+    const jungzigiComment = pendingJungzigiComment.get(userId) || '좋은 사진이네요! 📸';
+    pendingJungzigiComment.delete(userId);
+
+    db.prepare('UPDATE blocks SET content = ? WHERE chain_id = ? AND slot_index = ?')
+      .run(text, assignment.chain_id, assignment.slot_index);
+    updateAssignment(assignment.id, 'written');
+    db.prepare('UPDATE chains SET block_count = block_count + 1 WHERE id = ?').run(assignment.chain_id);
+    recordBlockOnchain(assignment.chain_id, text, user.tz_offset, userId).catch(() => {});
+
+    const count = getBlockCount(assignment.chain_id);
+    const fromCity = getCity(user.tz_offset);
+
+    if (count >= 24) {
+      completeChain(assignment.chain_id);
+      await ctx.reply(t(lang, 'jungzigi_complete', { comment: jungzigiComment, count }));
+    } else {
+      let nextTz = user.tz_offset + 1;
+      if (nextTz > 12) nextTz -= 24;
+      const toCity = getCity(nextTz);
+      await ctx.reply(t(lang, 'jungzigi_pass', { comment: jungzigiComment, count, fromCity, toCity }));
+    }
+    await rollNextChain(user);
+    return;
   }
 
   addBlock(assignment.chain_id, assignment.slot_index, userId, user.tz_offset, text);
@@ -330,89 +410,73 @@ bot.on('message:photo', async (ctx) => {
   const user = getUser(userId);
   if (!user) return;
 
-  // Get photo
   const photoId = getLargestPhotoId(ctx.message.photo);
   if (!photoId) return;
 
-  // Validate photo
+  // Step 1: 정지기 검증 중 메시지
+  await ctx.reply(t(lang, 'validating'));
+
+  // Step 2: Validate photo (mission + safety + 정지기 comment)
+  let jungzigiComment = '좋은 사진이네요! 📸';
   try {
     const base64 = await getPhotoBase64(bot, photoId);
     const validation = await aiValidatePhoto(base64, assignment.mission ?? '');
+    jungzigiComment = validation.jungzigiComment || jungzigiComment;
 
     if (validation.status !== 'pass') {
-      await ctx.reply(t(lang, 'photo_invalid', { reason: validation.userMessage }));
+      await ctx.reply(t(lang, 'jungzigi_fail', { comment: jungzigiComment }));
       return;
     }
   } catch (err: any) {
     console.error('Photo validation error:', err.message);
-    // Pass through on validation error
   }
 
-  // Use caption if provided, otherwise ask
+  // Step 3: Caption — use provided or ask
   const caption = ctx.message.caption?.trim();
   if (caption) {
-    // Save with caption
-    addBlock(assignment.chain_id, assignment.slot_index, userId, user.tz_offset, caption, photoId, 'photo');
-    updateAssignment(assignment.id, 'written');
-    recordBlockOnchain(assignment.chain_id, caption, user.tz_offset, userId).catch(() => {});
-
-    const count = getBlockCount(assignment.chain_id);
-    if (count >= 24) {
-      completeChain(assignment.chain_id);
-      await ctx.reply(t(lang, 'photo_saved', { count }));
-      // Result delivered later at chain_hour + 24h via cron
-    } else {
-      await ctx.reply(t(lang, 'photo_saved', { count }));
-    }
-    await rollNextChain(user);
+    await savePhotoBlock(ctx, assignment, userId, user, photoId, caption, lang, jungzigiComment);
   } else {
     // Store photo temporarily, ask for caption
-    // We abuse media_url field to store photo file_id, mark as 'writing'
     db.prepare('UPDATE assignments SET status = ? WHERE id = ?').run('writing', assignment.id);
-    // Store file_id in a temp way — we'll add it when caption comes
     db.prepare(`INSERT OR REPLACE INTO blocks (chain_id, slot_index, user_id, tz_offset, content, media_url, media_type)
       VALUES (?, ?, ?, ?, '', ?, 'photo')`)
       .run(assignment.chain_id, assignment.slot_index, userId, user.tz_offset, photoId);
-
+    // Store jungzigi comment for after caption
+    pendingJungzigiComment.set(userId, jungzigiComment);
     await ctx.reply(t(lang, 'photo_caption_ask'));
   }
 });
 
-// Handle caption after photo (text message while in 'writing' photo assignment)
-// This is handled in the text handler above — need to check:
-bot.on('message:text').filter(
-  (ctx) => {
-    const a = getPendingAssignment(ctx.from!.id);
-    return a?.mode === 'photo' && a?.status === 'writing';
-  },
-  async (ctx) => {
-    const userId = ctx.from!.id;
-    const assignment = getPendingAssignment(userId);
-    if (!assignment) return;
+// Store 정지기 comment between photo and caption
+const pendingJungzigiComment = new Map<number, string>();
 
-    const caption = ctx.message.text.trim();
-    const lang = getLang(ctx);
-    const user = getUser(userId);
-    if (!user) return;
+// Helper: save photo block + 정지기 response + progress
+async function savePhotoBlock(
+  ctx: any, assignment: any, userId: number, user: any,
+  photoId: string, caption: string, lang: string, jungzigiComment: string,
+) {
+  addBlock(assignment.chain_id, assignment.slot_index, userId, user.tz_offset, caption, photoId, 'photo');
+  updateAssignment(assignment.id, 'written');
+  recordBlockOnchain(assignment.chain_id, caption, user.tz_offset, userId).catch(() => {});
 
-    // Update the block with caption
-    db.prepare('UPDATE blocks SET content = ? WHERE chain_id = ? AND slot_index = ?')
-      .run(caption, assignment.chain_id, assignment.slot_index);
-    updateAssignment(assignment.id, 'written');
-    db.prepare('UPDATE chains SET block_count = block_count + 1 WHERE id = ?').run(assignment.chain_id);
-    recordBlockOnchain(assignment.chain_id, caption, user.tz_offset, userId).catch(() => {});
+  const count = getBlockCount(assignment.chain_id);
+  const chain = getChain(assignment.chain_id);
+  const fromCity = getCity(user.tz_offset);
 
-    const count = getBlockCount(assignment.chain_id);
-    if (count >= 24) {
-      completeChain(assignment.chain_id);
-      await ctx.reply(t(lang, 'photo_saved', { count }));
-      // Result delivered later at chain_hour + 24h via cron
-    } else {
-      await ctx.reply(t(lang, 'photo_saved', { count }));
-    }
-    await rollNextChain(user);
+  if (count >= 24) {
+    completeChain(assignment.chain_id);
+    await ctx.reply(t(lang, 'jungzigi_complete', { comment: jungzigiComment, count }));
+  } else {
+    // Calculate next TZ city
+    let nextTz = user.tz_offset + 1;
+    if (nextTz > 12) nextTz -= 24;
+    const toCity = getCity(nextTz);
+    await ctx.reply(t(lang, 'jungzigi_pass', { comment: jungzigiComment, count, fromCity, toCity }));
   }
-);
+  await rollNextChain(user);
+}
+
+// Caption after photo is now handled in the main text handler above (photo writing check)
 
 // ═══════════════════════════════════════
 // HOURLY CRON

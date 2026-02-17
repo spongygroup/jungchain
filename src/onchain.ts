@@ -44,31 +44,30 @@ export function hashMessage(content: string): string {
 
 /**
  * Record a participation on-chain (= add a block)
- * Returns the blockHash from the transaction event
+ * v6: no slotIndex, no isHuman — humans only, timezoneOffset required
  */
 export async function recordBlock(
   chainId: string,
-  slotIndex: number,
   messageContent: string,
   prevBlockHash: string,
-  isHuman: boolean,
+  timezoneOffset: number,
   participantAddress?: string,
 ): Promise<{ blockHash: string; txHash: string }> {
   const messageHash = hashMessage(messageContent);
-  const participant = participantAddress || ethers.ZeroAddress; // 0x0 for AI
+  const participant = participantAddress || rawWallet.address; // deployer as fallback (never ZeroAddress)
 
-  console.log(`  ⛓️  Recording block slot ${slotIndex} on-chain...`);
+  console.log(`  ⛓️  Recording block UTC${timezoneOffset >= 0 ? '+' : ''}${timezoneOffset} on-chain...`);
   
-  // Small delay to ensure previous tx state is reflected on RPC node
+  // Nonce reset to avoid stale nonce after errors
+  wallet.reset();
   await new Promise(r => setTimeout(r, 2000));
   
   const tx = await jungBlock.addBlock(
     chainId,
-    slotIndex,
     messageHash,
     prevBlockHash,
     participant,
-    isHuman,
+    timezoneOffset,
   );
   const receipt = await tx.wait();
   
@@ -79,7 +78,7 @@ export async function recordBlock(
     })
     .find((e: any) => e?.name === 'BlockAdded');
 
-  const blockHash = event?.args?.[2] || event?.args?.blockHash || ethers.ZeroHash; // args[2] = blockHash in event
+  const blockHash = event?.args?.blockHash || event?.args?.[1] || ethers.ZeroHash;
   
   console.log(`  ⛓️  Block recorded! tx: ${tx.hash.slice(0, 14)}... blockHash: ${blockHash.slice(0, 14)}...`);
   
@@ -92,13 +91,14 @@ export async function recordBlock(
 export async function mintSoulbound(
   to: string,
   chainId: string,
-  slotIndex: number,
+  timezoneOffset: number,
   chainLength: number,
   humanCount: number,
 ): Promise<{ tokenId: number; txHash: string }> {
   console.log(`  🎖️  Minting Soulbound NFT for ${to.slice(0, 10)}...`);
   
-  const tx = await jungSoulbound.mint(to, chainId, slotIndex, chainLength, humanCount);
+  wallet.reset();
+  const tx = await jungSoulbound.mint(to, chainId, timezoneOffset, chainLength, humanCount);
   const receipt = await tx.wait();
   
   const event = receipt.logs

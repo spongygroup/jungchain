@@ -99,8 +99,8 @@ contract JungBlock {
 
         emit BlockAdded(chainId, blockHash, prevBlockHash, participant, timezoneOffset);
 
-        // 완주 체크: 시작 TZ로 돌아왔는가 (2블록 이상)
-        if (timezoneOffset == chainStartTz[chainId] && chainBlockCount[chainId] > 1) {
+        // 완주 체크: 24블록 도달
+        if (chainBlockCount[chainId] == 24) {
             chainCompleted[chainId] = true;
             emit ChainCompleted(chainId, chainBlockCount[chainId]);
         }

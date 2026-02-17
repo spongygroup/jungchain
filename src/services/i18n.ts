@@ -44,6 +44,12 @@ const BASE: Record<string, Record<string, string>> = {
     chain_result: '🏁 정체인 완주!\n24개 도시, {count}명의 이야기.\n지구 한 바퀴를 돌아 다시 돌아왔어요.',
     onchain_recorded: '⛓️ 온체인 기록 완료!\n• 블록: {blocks}/24\n• 네트워크: Base Sepolia\n• tx: {url}',
     nft_minted: '🎖️ Soulbound NFT #{tokenId} 민팅 완료!\n"나는 이 정체인의 일부였다"\n{url}',
+    ask_mission: '📸 포토 릴레이를 시작합니다!\n\n참가자들에게 줄 미션을 입력해주세요.\n(예: "오늘 하늘을 보여주세요", "당신의 점심", "창밖 풍경")',
+    validating: '🔍 정지기가 사진을 확인하고 있어요...',
+    jungzigi_pass: '🤖 정지기: {comment}\n\n✅ {count}/24 · {fromCity} → {toCity}로 이동 중...',
+    jungzigi_complete: '🤖 정지기: {comment}\n\n🏁 {count}/24 · 지구 한 바퀴 완주! 결과는 내일 같은 시간에 도착해요.',
+    jungzigi_fail: '🤖 정지기: {comment}\n\n📸 다시 보내주세요!',
+    progress_update: '🌏 진행 상황\n• {count}/24 도시 완료\n• 마지막: 📍 {lastCity}\n• 다음: 📍 {nextCity}',
   },
   en: {
     welcome: '🌏 Welcome to 정(情), {name}!\n\nYour story will travel across 24 timezones and return to you.\n\n📍 Share your location to set your timezone automatically.',
@@ -83,6 +89,12 @@ const BASE: Record<string, Record<string, string>> = {
     chain_result: '🏁 Chain complete!\n24 cities, {count} stories.\nAround the world and back to you.',
     onchain_recorded: '⛓️ Recorded on-chain!\n• Blocks: {blocks}/24\n• Network: Base Sepolia\n• tx: {url}',
     nft_minted: '🎖️ Soulbound NFT #{tokenId} minted!\n"I was part of this 정 chain"\n{url}',
+    ask_mission: '📸 Starting a photo relay!\n\nWrite a mission for participants.\n(e.g. "Show me today\'s sky", "Your lunch", "View from your window")',
+    validating: '🔍 정지기 is checking your photo...',
+    jungzigi_pass: '🤖 정지기: {comment}\n\n✅ {count}/24 · Moving from {fromCity} → {toCity}...',
+    jungzigi_complete: '🤖 정지기: {comment}\n\n🏁 {count}/24 · Around the world! Results arrive tomorrow at the same time.',
+    jungzigi_fail: '🤖 정지기: {comment}\n\n📸 Please try again!',
+    progress_update: '🌏 Progress\n• {count}/24 cities done\n• Last: 📍 {lastCity}\n• Next: 📍 {nextCity}',
   },
 };
 

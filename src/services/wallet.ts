@@ -1,10 +1,15 @@
 /**
  * CDP Server Wallet — 유저별 지갑 생성/관리
  * 유저는 지갑 존재를 모름. 서버가 투명하게 관리.
+ * wallets.json에 백업 — DB 리셋해도 지갑 매핑 유지.
  */
 import { CdpClient } from '@coinbase/cdp-sdk';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const WALLETS_PATH = join(__dirname, '../../data/wallets.json');
 
 // Load CDP credentials
 const cdpCreds = JSON.parse(readFileSync(join(process.env.HOME!, '.config/cdp/credentials.json'), 'utf8'));
@@ -22,22 +27,50 @@ async function getClient(): Promise<CdpClient> {
   return cdpClient;
 }
 
-/**
- * Create a new EVM account (wallet) for a user
- * Returns the wallet address
- */
-export async function createWallet(): Promise<{ address: string; accountId: string }> {
-  const client = await getClient();
-  const account = await client.evm.createAccount();
-  return {
-    address: account.address,
-    accountId: account.address, // CDP EVM accounts use address as ID
-  };
+// ─── Wallet backup (wallets.json) ───
+
+function loadWalletMap(): Record<string, string> {
+  if (!existsSync(WALLETS_PATH)) return {};
+  try {
+    return JSON.parse(readFileSync(WALLETS_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveWalletMap(map: Record<string, string>) {
+  mkdirSync(dirname(WALLETS_PATH), { recursive: true });
+  writeFileSync(WALLETS_PATH, JSON.stringify(map, null, 2));
 }
 
 /**
- * Get wallet address — just returns stored address (no API call needed)
+ * Get existing wallet for a user from backup (no API call)
  */
-export function getWalletAddress(address: string): string {
-  return address;
+export function getExistingWallet(telegramId: number): string | null {
+  const map = loadWalletMap();
+  return map[String(telegramId)] ?? null;
+}
+
+/**
+ * Create a new EVM account (wallet) for a user
+ * Checks backup first — reuses existing wallet if found
+ */
+export async function createWallet(telegramId: number): Promise<{ address: string; isNew: boolean }> {
+  // Check backup first
+  const existing = getExistingWallet(telegramId);
+  if (existing) {
+    return { address: existing, isNew: false };
+  }
+
+  // Create new
+  const client = await getClient();
+  const account = await client.evm.createAccount();
+  const address = account.address;
+
+  // Save to backup
+  const map = loadWalletMap();
+  map[String(telegramId)] = address;
+  saveWalletMap(map);
+
+  return { address, isNew: true };
 }

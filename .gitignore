@@ -9,6 +9,16 @@ tmp/
 data/relay-photos/
 data/red-chain-*
 data/*.html
+data/e2e-photos/
+data/e2e-resized/
+data/e2e-*.json
+data/e2e-*.txt
+data/e2e-*.png
+data/e2e-*.mp4
+data/e2e-*.zip
+data/nft-preview.*
+data/wallets.json
+data/build-html.cjs
 
 artifacts/
 cache/
