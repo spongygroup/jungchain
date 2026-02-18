@@ -1,10 +1,9 @@
 import { Bot } from 'grammy';
 import { config } from './config.js';
 import { registerUser, findByTelegramId } from './modules/user-manager.js';
-import { getChainMessages } from './db/database.js';
 
 export function createBot(): Bot {
-  const bot = new Bot(config.telegramBotToken);
+  const bot = new Bot(config.jungBotToken);
 
   bot.command('start', async (ctx) => {
     await ctx.reply(

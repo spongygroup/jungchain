@@ -303,7 +303,7 @@ async function sendTelegramPhotoBuffer(imageBuffer: Buffer, caption?: string): P
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`;
   const formData = new FormData();
   formData.append('chat_id', TELEGRAM_CHAT_ID);
-  formData.append('photo', new Blob([imageBuffer], { type: 'image/png' }), 'photo.png');
+  formData.append('photo', new Blob([new Uint8Array(imageBuffer)], { type: 'image/png' }), 'photo.png');
   if (caption) formData.append('caption', caption);
   for (let attempt = 0; attempt < 3; attempt++) {
     try {

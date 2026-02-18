@@ -1,7 +1,8 @@
 /**
- * AI 서비스 — Gemini 기반 스토리/캡션/번역/검증
+ * AI 서비스 — Gemini 기반 스토리/캡션/번역/검증 + OpenAI Whisper STT
  */
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import OpenAI, { toFile } from 'openai';
 import { config, getCity, TZ_LANGUAGES } from '../config.js';
 
 const genAI = new GoogleGenerativeAI(config.googleApiKey);
@@ -201,4 +202,34 @@ export async function generatePhotoCaption(
   } catch {
     return `📍 ${city}`;
   }
+}
+
+// ─── Content validation (Gemini Flash) ───
+export async function validateText(text: string): Promise<{ safe: boolean; reason?: string }> {
+  try {
+    const model = getModel('gemini-2.0-flash');
+    const result = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text:
+        `다음 텍스트가 안전한지 판단해줘. 차단 기준: 혐오/차별, 성적 콘텐츠, 폭력 선동, 개인정보 노출. 일상적인 표현이나 가벼운 욕설은 허용.
+JSON으로만 답해: {"safe": true} 또는 {"safe": false, "reason": "사유"}
+
+텍스트: "${text}"` }] }],
+    });
+    const json = result.response.text().trim().replace(/```json\n?|\n?```/g, '');
+    return JSON.parse(json);
+  } catch {
+    return { safe: true }; // fail-open
+  }
+}
+
+// ─── Voice transcription via OpenAI Whisper ───
+export async function transcribeVoice(audioBuffer: Buffer): Promise<string> {
+  const openai = new OpenAI({ apiKey: config.openaiApiKey });
+
+  const file = await toFile(audioBuffer, 'voice.ogg', { type: 'audio/ogg' });
+  const transcription = await openai.audio.transcriptions.create({
+    model: 'whisper-1',
+    file,
+  });
+  return transcription.text.trim();
 }

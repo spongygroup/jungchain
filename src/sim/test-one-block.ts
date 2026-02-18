@@ -63,7 +63,7 @@ async function sendTelegramPhotoBuffer(buf: Buffer, caption?: string): Promise<v
     try {
       const form = new FormData();
       form.append('chat_id', TELEGRAM_CHAT_ID);
-      form.append('photo', new Blob([buf], { type: 'image/png' }), 'photo.png');
+      form.append('photo', new Blob([new Uint8Array(buf)], { type: 'image/png' }), 'photo.png');
       if (caption) form.append('caption', caption);
       const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
         method: 'POST',

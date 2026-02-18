@@ -4,6 +4,7 @@ export const config = {
   jungBotToken: process.env.JUNG_BOT_TOKEN ?? '',
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
   googleApiKey: process.env.GOOGLE_API_KEY ?? '',
+  openaiApiKey: process.env.OPENAI_API_KEY ?? '',
   simMode: process.env.SIM_MODE === 'true',
   simSpeed: Number(process.env.SIM_SPEED ?? '60'),
   simUsersPerTz: Number(process.env.SIM_USERS_PER_TZ ?? '2'),
@@ -70,6 +71,18 @@ export const TZ_LANGUAGES: Record<number, string> = {
   '-10': 'Hawaiian Pidgin (or English)',
   '-11': 'Samoan (Gagana Sāmoa) or English',
 };
+
+// Timezone offset → country flag
+export const TZ_FLAGS: Record<number, string> = {
+  12: '🇳🇿', 11: '🇸🇧', 10: '🇦🇺', 9: '🇰🇷', 8: '🇨🇳', 7: '🇹🇭',
+  6: '🇧🇩', 5: '🇵🇰', 4: '🇦🇪', 3: '🇷🇺', 2: '🇪🇬', 1: '🇫🇷', 0: '🇬🇧',
+  '-1': '🇵🇹', '-2': '🌊', '-3': '🇧🇷', '-4': '🇺🇸', '-5': '🇺🇸', '-6': '🇺🇸',
+  '-7': '🇺🇸', '-8': '🇺🇸', '-9': '🇺🇸', '-10': '🇺🇸', '-11': '🇼🇸',
+};
+
+export function getFlag(offset: number): string {
+  return TZ_FLAGS[offset] ?? '🌍';
+}
 
 export function getCity(offset: number): string {
   return TZ_CITIES[offset] ?? `UTC${offset >= 0 ? '+' : ''}${offset}`;

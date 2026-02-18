@@ -480,11 +480,9 @@ async function run() {
       try {
         const result = await recordBlock(
           chainId,
-          i,                    // slotIndex (0~23)
-          content,              // message content → hashed on-chain
-          prevBlockHash,        // link to previous block
-          !isAi,                // isHuman
-          isAi ? undefined : undefined, // participant address (0x0 for now)
+          content,
+          prevBlockHash,
+          offset,
         );
         prevBlockHash = result.blockHash;
         blockTxHashes.push(result.txHash);

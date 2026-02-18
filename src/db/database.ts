@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { config } from '../config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const db = new Database(config.dbPath);
+const db: InstanceType<typeof Database> = new Database(config.dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
@@ -32,15 +32,15 @@ export function setTranslation(lang: string, key: string, value: string) {
 
 export function upsertUser(
   telegramId: number, username: string | undefined, firstName: string | undefined,
-  tzOffset: number, notifyHour: number, lang?: string,
+  tzOffset: number, notifyHour: number, lang?: string, city?: string,
 ) {
   db.prepare(`
-    INSERT INTO users (telegram_id, username, first_name, tz_offset, notify_hour, lang)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO users (telegram_id, username, first_name, tz_offset, notify_hour, lang, city)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(telegram_id) DO UPDATE SET
       username = excluded.username, first_name = excluded.first_name,
-      tz_offset = excluded.tz_offset, notify_hour = excluded.notify_hour, lang = excluded.lang
-  `).run(telegramId, username ?? null, firstName ?? null, tzOffset, notifyHour, lang ?? 'en');
+      tz_offset = excluded.tz_offset, notify_hour = excluded.notify_hour, lang = excluded.lang, city = excluded.city
+  `).run(telegramId, username ?? null, firstName ?? null, tzOffset, notifyHour, lang ?? 'en', city ?? null);
 }
 
 export function setUserWallet(telegramId: number, walletAddress: string) {
@@ -70,7 +70,7 @@ export function createChain(
   return Number(result.lastInsertRowid);
 }
 
-export function getChain(chainId: number) {
+export function getChain(chainId: string | number) {
   return db.prepare('SELECT * FROM chains WHERE id = ?').get(chainId) as any;
 }
 
@@ -165,7 +165,12 @@ export function getExpiredAssignments(nowUtc: string): any[] {
 // Chain TZ progression: creator_tz → creator_tz-1 → ... (wrapping around)
 // Current position = creator_tz - block_count (the next slot's TZ)
 export function findNextChainForUser(userId: number, tzOffset: number): any | null {
-  // Get active chains where user hasn't participated and chain needs this TZ
+  const chains = findAllChainsForUser(userId, tzOffset);
+  return chains.length > 0 ? chains[0] : null;
+}
+
+export function findAllChainsForUser(userId: number, tzOffset: number): any[] {
+  // Get active chains where user hasn't participated
   const chains = db.prepare(`
     SELECT c.* FROM chains c
     WHERE c.status = 'active'
@@ -174,16 +179,8 @@ export function findNextChainForUser(userId: number, tzOffset: number): any | nu
     ORDER BY c.created_at ASC
   `).all(userId, userId) as any[];
 
-  // Filter: chain's next needed TZ matches user's TZ
-  for (const chain of chains) {
-    const nextSlot = chain.block_count + 1; // next slot to fill (1-indexed, creator already filled 1)
-    // TZ progression: slot 1 = creator_tz, slot 2 = creator_tz - 1, etc. (wrap at -11 → +12)
-    const slotTz = ((chain.creator_tz - (nextSlot - 1)) % 24 + 24 + 12) % 24 - 11;
-    // Simplified: just check if chain needs a block and user hasn't done it
-    // For MVP, any user in any TZ can participate (TZ matching comes later with more users)
-    return chain;
-  }
-  return null;
+  // For MVP, any user in any TZ can participate (TZ matching comes later with more users)
+  return chains;
 }
 
 // Find active chains that should be delivered to a specific TZ offset at current UTC hour
@@ -201,3 +198,47 @@ export function getChainsForTzAtHour(utcHour: number, tzOffset: number): any[] {
 export function getUsersByTzOffset(tzOffset: number): any[] {
   return db.prepare('SELECT * FROM users WHERE tz_offset = ?').all(tzOffset) as any[];
 }
+
+// ─── Legacy compatibility shims (pre-v6 modules) ───
+
+export function initDb(_path?: string): void {
+  // v6: DB auto-initializes at import. No-op for legacy callers.
+}
+
+export function insertChain(_data: { id: string; date: string; hour: number }): void {
+  // Legacy shim — v6 uses createChain() with different schema
+}
+
+export function updateChain(_id: string | number, _fields: Record<string, any>): void {
+  // Legacy shim — v6 uses completeChain() with different schema
+}
+
+export function getChainMessages(chainId: string | number): any[] {
+  const id = typeof chainId === 'number' ? chainId : parseInt(chainId, 10);
+  if (isNaN(id)) return [];
+  return getAllBlocks(id);
+}
+
+export function insertMessage(_msg: any): void {
+  // Legacy shim — v6 uses addBlock()
+}
+
+export function getLastMessage(chainId: string | number): any {
+  const id = typeof chainId === 'number' ? chainId : parseInt(chainId, 10);
+  if (isNaN(id)) return null;
+  return getLastBlock(id);
+}
+
+export function insertUser(user: any): void {
+  upsertUser(
+    user.telegram_id ?? 0,
+    user.username,
+    user.first_name ?? user.timezone,
+    user.utc_offset ?? 0,
+    0,
+    'en',
+  );
+}
+
+export { getUsersByTzOffset as getUsersByOffset };
+export { getUser as getUserByTelegramId };

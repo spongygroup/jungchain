@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
   tz_offset     INTEGER NOT NULL,          -- -11 ~ +12
   notify_hour   INTEGER NOT NULL,          -- 0~23 (local hour)
   lang          TEXT DEFAULT 'en',         -- telegram language_code
+  city          TEXT,                       -- reverse geocoded city name
   wallet_address TEXT,                     -- CDP server wallet (auto-created)
   created_at    TEXT DEFAULT (datetime('now'))
 );

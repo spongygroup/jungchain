@@ -1,16 +1,16 @@
 #!/usr/bin/env npx tsx
 /**
- * 정봇 v6 — 타임존 릴레이
+ * 정봇 v7 — 타임존 릴레이
  * 모드: text | story | photo
  */
 import 'dotenv/config';
 import { Bot, InlineKeyboard, Keyboard } from 'grammy';
 import cron from 'node-cron';
-import { config, getCity } from './config.js';
+import { config, getCity, TZ_LANGUAGES } from './config.js';
 import { t, tAsync, resolveLang } from './services/i18n.js';
 import { locationToOffset, reverseGeocode } from './services/geo.js';
-import { validatePhoto as aiValidatePhoto } from './services/ai.js';
-import { sendText, sendPhoto, deleteMessage, getPhotoBase64, getLargestPhotoId } from './services/telegram.js';
+import { validatePhoto as aiValidatePhoto, validateText, transcribeVoice, translateContent } from './services/ai.js';
+import { sendText, sendPhoto, sendVoice, deleteMessage, getPhotoBase64, getFileBuffer, getLargestPhotoId } from './services/telegram.js';
 import { makeChainId, recordBlock, mintSoulbound, createOnchainChain, explorerUrl } from './services/onchain.js';
 import { createWallet } from './services/wallet.js';
 import { ethers } from 'ethers';
@@ -20,7 +20,7 @@ import db, {
   addBlock, getLastBlock, getBlockCount, getAllBlocks,
   createAssignment, getPendingAssignment, updateAssignment,
   getExpiredAssignments, findNextChainForUser,
-  getChainsForTzAtHour, getUsersByTzOffset,
+  findAllChainsForUser, getChainsForTzAtHour, getUsersByTzOffset,
   getChainsToDeliver, markDelivered,
 } from './db/database.js';
 
@@ -139,7 +139,7 @@ bot.callbackQuery(/^hour:/, async (ctx) => {
   const from = ctx.from;
   const lang = getLang(ctx);
 
-  upsertUser(from.id, from.username, from.first_name, tzOffset, notifyHour, from.language_code);
+  upsertUser(from.id, from.username, from.first_name, tzOffset, notifyHour, from.language_code, city);
 
   // Create or restore CDP wallet
   createWallet(from.id).then(({ address, isNew }) => {
@@ -203,43 +203,17 @@ bot.command('new', async (ctx) => {
   const user = getUser(ctx.from!.id);
   if (!user) return ctx.reply(t(lang, 'setup_first'));
 
-  // Mode selection
-  const kb = new InlineKeyboard()
-    .text(t(lang, 'mode_text'), 'new_mode:text')
-    .text(t(lang, 'mode_story'), 'new_mode:story')
-    .text(t(lang, 'mode_photo'), 'new_mode:photo');
-
-  await ctx.reply(t(lang, 'pick_mode'), { reply_markup: kb });
-});
-
-bot.callbackQuery(/^new_mode:/, async (ctx) => {
-  const mode = ctx.callbackQuery.data.split(':')[1] as 'text' | 'story' | 'photo';
-  const lang = getLang(ctx);
-  const user = getUser(ctx.from!.id);
-  if (!user) return ctx.answerCallbackQuery(t(lang, 'setup_first'));
-
   const now = new Date();
-  const city = getCity(user.tz_offset);
+  const city = user.city || getCity(user.tz_offset);
+  const name = ctx.from?.first_name ?? 'Friend';
   const localHour = ((now.getUTCHours() + user.tz_offset) % 24 + 24) % 24;
 
-  if (mode === 'photo') {
-    // Ask for mission first
-    pendingMission.set(ctx.from!.id, { mode, city, localHour, now: now.toISOString() });
-    await ctx.editMessageText(t(lang, 'ask_mission'));
-    await ctx.answerCallbackQuery();
-    return;
-  }
-
-  const chainId = createChain(user.telegram_id, user.tz_offset, now.toISOString(), mode, localHour);
+  const chainId = createChain(user.telegram_id, user.tz_offset, now.toISOString(), 'free', localHour);
   const expiresAt = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
   const assignId = createAssignment(user.telegram_id, chainId, 1, expiresAt);
 
-  let promptKey = 'new_chain';
-  if (mode === 'story') promptKey = 'new_story';
-
-  await ctx.editMessageText(t(lang, promptKey, { city, max: config.maxMessageLength }));
+  await ctx.reply(t(lang, 'new_free', { city, name }));
   scheduleExpiry(assignId, ctx.from!.id, 60 * 60 * 1000);
-  await ctx.answerCallbackQuery();
 });
 
 // ═══════════════════════════════════════
@@ -288,13 +262,7 @@ bot.callbackQuery(/^write:/, async (ctx) => {
   const content = lastBlock?.content ? (lastBlock.content.length > 150 ? lastBlock.content.slice(0, 150) + '...' : lastBlock.content) : '';
   const city = lastBlock ? getCity(lastBlock.tz_offset) : '';
 
-  if (chain.mode === 'story') {
-    await ctx.editMessageText(t(lang, 'story_prompt', { slot: slotIndex, city, content, max: config.maxMessageLength }));
-  } else if (chain.mode === 'photo') {
-    await ctx.editMessageText(t(lang, 'photo_prompt', { slot: slotIndex, city, content, mission: chain.mission ?? '' }));
-  } else {
-    await ctx.editMessageText(t(lang, 'write_prompt', { slot: slotIndex, max: config.maxMessageLength }));
-  }
+  await ctx.editMessageText(t(lang, 'write_prompt', { slot: slotIndex, max: config.maxMessageLength }));
   await ctx.answerCallbackQuery();
 });
 
@@ -353,31 +321,12 @@ bot.on('message:text', async (ctx) => {
   const user = getUser(userId);
   if (!user) return;
 
-  // Photo mode waiting for caption — redirect to caption handler
-  if (assignment.mode === 'photo' && assignment.status === 'writing') {
-    const jungzigiComment = pendingJungzigiComment.get(userId) || '좋은 사진이네요! 📸';
-    pendingJungzigiComment.delete(userId);
+  // Photo caption redirect removed — caption is now optional (v7)
 
-    db.prepare('UPDATE blocks SET content = ? WHERE chain_id = ? AND slot_index = ?')
-      .run(text, assignment.chain_id, assignment.slot_index);
-    updateAssignment(assignment.id, 'written');
-    db.prepare('UPDATE chains SET block_count = block_count + 1 WHERE id = ?').run(assignment.chain_id);
-    recordBlockOnchain(assignment.chain_id, text, user.tz_offset, userId).catch(() => {});
-
-    const count = getBlockCount(assignment.chain_id);
-    const fromCity = getCity(user.tz_offset);
-
-    if (count >= 24) {
-      completeChain(assignment.chain_id);
-      await ctx.reply(t(lang, 'jungzigi_complete', { comment: jungzigiComment, count }));
-    } else {
-      let nextTz = user.tz_offset + 1;
-      if (nextTz > 12) nextTz -= 24;
-      const toCity = getCity(nextTz);
-      await ctx.reply(t(lang, 'jungzigi_pass', { comment: jungzigiComment, count, fromCity, toCity }));
-    }
-    await rollNextChain(user);
-    return;
+  // Content validation
+  const validation = await validateText(text);
+  if (!validation.safe) {
+    return ctx.reply(t(lang, 'content_blocked', { reason: validation.reason || '' }));
   }
 
   addBlock(assignment.chain_id, assignment.slot_index, userId, user.tz_offset, text);
@@ -390,9 +339,10 @@ bot.on('message:text', async (ctx) => {
   if (count >= 24) {
     completeChain(assignment.chain_id);
     await ctx.reply(t(lang, 'block_saved', { count }));
-    // Result delivered later at chain_hour + 24h via cron
   } else {
-    await ctx.reply(t(lang, 'block_saved_next', { count }));
+    const chain = getChain(assignment.chain_id);
+    const nextHour = chain?.chain_hour ?? user.notify_hour;
+    await ctx.reply(t(lang, 'block_saved_next', { count, nextHour }));
   }
   await rollNextChain(user);
 });
@@ -404,7 +354,7 @@ bot.on('message:text', async (ctx) => {
 bot.on('message:photo', async (ctx) => {
   const userId = ctx.from!.id;
   const assignment = getPendingAssignment(userId);
-  if (!assignment || assignment.mode !== 'photo') return;
+  if (!assignment) return;
 
   const lang = getLang(ctx);
   const user = getUser(userId);
@@ -432,19 +382,8 @@ bot.on('message:photo', async (ctx) => {
   }
 
   // Step 3: Caption — use provided or ask
-  const caption = ctx.message.caption?.trim();
-  if (caption) {
-    await savePhotoBlock(ctx, assignment, userId, user, photoId, caption, lang, jungzigiComment);
-  } else {
-    // Store photo temporarily, ask for caption
-    db.prepare('UPDATE assignments SET status = ? WHERE id = ?').run('writing', assignment.id);
-    db.prepare(`INSERT OR REPLACE INTO blocks (chain_id, slot_index, user_id, tz_offset, content, media_url, media_type)
-      VALUES (?, ?, ?, ?, '', ?, 'photo')`)
-      .run(assignment.chain_id, assignment.slot_index, userId, user.tz_offset, photoId);
-    // Store jungzigi comment for after caption
-    pendingJungzigiComment.set(userId, jungzigiComment);
-    await ctx.reply(t(lang, 'photo_caption_ask'));
-  }
+  const caption = ctx.message.caption?.trim() || '';
+  await savePhotoBlock(ctx, assignment, userId, user, photoId, caption, lang, jungzigiComment);
 });
 
 // Store 정지기 comment between photo and caption
@@ -468,15 +407,88 @@ async function savePhotoBlock(
     await ctx.reply(t(lang, 'jungzigi_complete', { comment: jungzigiComment, count }));
   } else {
     // Calculate next TZ city
-    let nextTz = user.tz_offset + 1;
-    if (nextTz > 12) nextTz -= 24;
-    const toCity = getCity(nextTz);
+    let nextTz = user.tz_offset - 1;
+    if (nextTz < -11) nextTz += 24;
+    const toCity = `UTC${nextTz >= 0 ? '+' : ''}${nextTz}`;
     await ctx.reply(t(lang, 'jungzigi_pass', { comment: jungzigiComment, count, fromCity, toCity }));
   }
   await rollNextChain(user);
 }
 
 // Caption after photo is now handled in the main text handler above (photo writing check)
+
+// ═══════════════════════════════════════
+// VOICE INPUT
+// ═══════════════════════════════════════
+
+bot.on('message:voice', async (ctx) => {
+  const userId = ctx.from!.id;
+  const assignment = getPendingAssignment(userId);
+  const lang = getLang(ctx);
+
+  if (!assignment) {
+    return ctx.reply(t(lang, 'voice_no_assignment'));
+  }
+
+  const user = getUser(userId);
+  if (!user) return;
+
+  const voiceFileId = ctx.message.voice.file_id;
+
+  // Step 1: Transcribing indicator
+  await ctx.reply(t(lang, 'voice_transcribing'));
+
+  // Step 2: Download voice file + Whisper STT
+  let transcript: string;
+  try {
+    const buffer = await getFileBuffer(bot, voiceFileId);
+    transcript = await transcribeVoice(buffer);
+  } catch (err: any) {
+    console.error('Voice transcription error:', err.message);
+    return ctx.reply(t(lang, 'voice_transcribe_fail'));
+  }
+
+  if (!transcript) {
+    return ctx.reply(t(lang, 'voice_transcribe_fail'));
+  }
+
+  // Step 3: Validate content
+  const validation = await validateText(transcript);
+  if (!validation.safe) {
+    return ctx.reply(t(lang, 'content_blocked', { reason: validation.reason || '' }));
+  }
+
+  // Step 4: Translate via existing pattern (Gemini)
+  const nextTz = user.tz_offset - 1 < -11 ? user.tz_offset - 1 + 24 : user.tz_offset - 1;
+  const targetLang = TZ_LANGUAGES[nextTz] ?? 'English';
+  let translated: string;
+  try {
+    translated = await translateContent([transcript], targetLang);
+  } catch {
+    translated = transcript;
+  }
+
+  // Step 5: Save block (voice): media_url = file_id, content = transcript, media_type = 'voice'
+  addBlock(assignment.chain_id, assignment.slot_index, userId, user.tz_offset, transcript, voiceFileId, 'voice');
+  updateAssignment(assignment.id, 'written');
+
+  // On-chain record (async, non-blocking)
+  recordBlockOnchain(assignment.chain_id, transcript, user.tz_offset, userId).catch(() => {});
+
+  const count = getBlockCount(assignment.chain_id);
+
+  if (count >= 24) {
+    completeChain(assignment.chain_id);
+    await ctx.reply(t(lang, 'block_saved', { count }));
+  } else {
+    const chain = getChain(assignment.chain_id);
+    const nextHour = chain?.chain_hour ?? user.notify_hour;
+    await ctx.reply(
+      t(lang, 'voice_saved', { count, nextHour }) + `\n\n🎙️ "${transcript}"\n🌐 ${translated}`
+    );
+  }
+  await rollNextChain(user);
+});
 
 // ═══════════════════════════════════════
 // HOURLY CRON
@@ -537,56 +549,190 @@ function scheduleExpiry(assignmentId: number, chatId: number, delayMs: number) {
   }, delayMs);
 }
 
-async function rollNextChain(user: any) {
-  const nextChain = findNextChainForUser(user.telegram_id, user.tz_offset);
-  if (!nextChain) return;
+function scheduleCountdown(assignmentId: number, chatId: number, messageId: number, originalText: string, kb: any) {
+  const intervalMs = 5 * 60 * 1000; // 5분마다
+  const startTime = Date.now();
+  const totalMs = 60 * 60 * 1000; // 1시간
 
-  const lastBlock = getLastBlock(nextChain.id);
+  const timer = setInterval(async () => {
+    const a = db.prepare('SELECT * FROM assignments WHERE id = ?').get(assignmentId) as any;
+    if (!a || !['pending', 'writing'].includes(a.status)) {
+      clearInterval(timer);
+      return;
+    }
+
+    const elapsed = Date.now() - startTime;
+    const remaining = Math.max(0, totalMs - elapsed);
+    const mins = Math.ceil(remaining / 60000);
+
+    if (mins <= 0) {
+      clearInterval(timer);
+      return;
+    }
+
+    const warning = mins <= 10 ? ' ⚠️' : '';
+    const updatedText = originalText.replace(/⏰.*/, `⏰ 남은 시간: ${mins}분${warning}`);
+
+    try {
+      await bot.api.editMessageText(chatId, messageId, updatedText, { reply_markup: kb });
+    } catch { /* message might be deleted or unchanged */ }
+  }, intervalMs);
+}
+
+// Build arrival message for a specific chain
+function buildArrivalMessage(chain: any, user: any, index: number, total: number) {
+  const lastBlock = getLastBlock(chain.id);
+  const nextSlot = (lastBlock?.slot_index ?? 0) + 1;
+  const lang = user.lang ?? 'en';
+  const prevContent = lastBlock?.content ?? '';
+  const prevUserId = lastBlock ? lastBlock.user_id : chain.creator_id;
+  const prevUser = getUser(prevUserId);
+  const prevName = prevUser?.first_name ?? prevUser?.username ?? 'someone';
+  const prevTzOffset = lastBlock ? lastBlock.tz_offset : chain.creator_tz;
+  const prevFlag = getFlag(prevTzOffset);
+  const prevCity = prevUser?.city
+    ? `${prevFlag} ${prevUser.city}`
+    : `${prevFlag} ${getCity(prevTzOffset)}`;
+  const count = getBlockCount(chain.id);
+
+  const now = new Date();
+  const localNow = new Date(now.getTime() + user.tz_offset * 60 * 60 * 1000);
+  const currentHour = localNow.getUTCHours();
+  const deadlineStr = `${String((currentHour + 1) % 24).padStart(2, '0')}:00`;
+  const text = t(lang, 'arrived', { count, city: prevCity, name: prevName, content: prevContent, deadline: deadlineStr });
+
+  const kb = new InlineKeyboard()
+    .text(t(lang, 'write'), `write:${chain.id}:${nextSlot}`)
+    .row();
+  if (total > 1) {
+    kb.text('◀️', `nav:prev:${user.telegram_id}:${index}`)
+      .text(`${index + 1}/${total}`, 'nav:info')
+      .text('▶️', `nav:next:${user.telegram_id}:${index}`);
+  }
+
+  return { text, kb, lastBlock, prevTzOffset, prevCity, prevContent, nextSlot };
+}
+
+async function rollNextChain(user: any) {
+  const allChains = findAllChainsForUser(user.telegram_id, user.tz_offset);
+  if (allChains.length === 0) return;
+
+  const chain = allChains[0];
+  const lastBlock = getLastBlock(chain.id);
   const nextSlot = (lastBlock?.slot_index ?? 0) + 1;
   if (nextSlot > 24) return;
 
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
-  const assignId = createAssignment(user.telegram_id, nextChain.id, nextSlot, expiresAt);
+  const assignId = createAssignment(user.telegram_id, chain.id, nextSlot, expiresAt);
 
-  const lang = user.lang ?? 'en';
-  const prevContent = lastBlock?.content ?? '';
-  const prevCity = lastBlock ? getCity(lastBlock.tz_offset) : getCity(nextChain.creator_tz);
-  const count = getBlockCount(nextChain.id);
-  const content = prevContent.length > 150 ? prevContent.slice(0, 150) + '...' : prevContent;
-
-  const kb = new InlineKeyboard()
-    .text(t(lang, 'write'), `write:${nextChain.id}:${nextSlot}`)
-    .text(t(lang, 'skip'), `skip:${nextChain.id}:${assignId}`);
-
-  // Mode-specific arrival message
-  let text: string;
-  if (nextChain.mode === 'photo' && lastBlock?.media_url) {
-    // Send previous photo + prompt
-    text = t(lang, 'photo_prompt', { slot: nextSlot, city: prevCity, content, mission: nextChain.mission ?? '' });
-  } else if (nextChain.mode === 'story') {
-    text = t(lang, 'story_prompt', { slot: nextSlot, city: prevCity, content, max: config.maxMessageLength });
-  } else {
-    text = t(lang, 'arrived', { count, city: prevCity, content });
-  }
+  const { text, kb, prevTzOffset, prevCity, prevContent } = buildArrivalMessage(chain, user, 0, allChains.length);
 
   try {
     const chatId = user.telegram_id;
 
-    // If photo mode and previous block has photo, send photo first
-    if (nextChain.mode === 'photo' && lastBlock?.media_url) {
-      await sendPhoto(bot, chatId, lastBlock.media_url, `📍 ${prevCity}: ${content}`);
+    // If previous block has photo, send with timestamp caption
+    if (lastBlock?.media_type === 'photo' && lastBlock?.media_url) {
+      const blockCreated = new Date(lastBlock.created_at + 'Z');
+      const localBlock = new Date(blockCreated.getTime() + (lastBlock.tz_offset) * 60 * 60 * 1000);
+      const dateStr = `${localBlock.getUTCFullYear()}.${String(localBlock.getUTCMonth()+1).padStart(2,'0')}.${String(localBlock.getUTCDate()).padStart(2,'0')}`;
+      const timeStr = `${String(localBlock.getUTCHours()).padStart(2,'0')}:${String(localBlock.getUTCMinutes()).padStart(2,'0')}`;
+      const tzStr = `UTC${lastBlock.tz_offset >= 0 ? '+' : ''}${lastBlock.tz_offset}`;
+      const photoCaption = `🕐 ${dateStr} ${timeStr} (${tzStr})`;
+      await sendPhoto(bot, chatId, lastBlock.media_url, photoCaption);
+    }
+
+    // If previous block is voice, send original voice + translated transcript
+    if (lastBlock?.media_type === 'voice' && lastBlock?.media_url) {
+      const content = prevContent.length > 150 ? prevContent.slice(0, 150) + '...' : prevContent;
+      let voiceCaption = `🎙️ ${prevCity}: "${content}"`;
+      try {
+        const targetLang = TZ_LANGUAGES[user.tz_offset] ?? 'English';
+        const translated = await translateContent([prevContent], targetLang);
+        voiceCaption += `\n🌐 ${translated}`;
+      } catch { /* translation failed, send without */ }
+      await sendVoice(bot, chatId, lastBlock.media_url, voiceCaption);
     }
 
     const msgId = await sendText(bot, chatId, text, { reply_markup: kb });
     if (msgId) {
       updateAssignment(assignId, 'pending', msgId, chatId);
+      scheduleCountdown(assignId, chatId, msgId, text, kb);
     }
     scheduleExpiry(assignId, chatId, 60 * 60 * 1000);
   } catch (e) {
     console.error(`Failed to send to ${user.telegram_id}:`, e);
   }
 }
+
+// Navigation callback handler for browsing chains
+// Demo nav handler (text-only) — temporary test
+const demoSamples = [
+  { city: '🇰🇷 성남시', name: 'jay', count: '5/24' },
+  { city: '🇹🇭 방콕', name: 'mali', count: '12/24' },
+  { city: '🇦🇪 두바이', name: 'omar', count: '18/24' },
+  { city: '🇧🇷 상파울루', name: 'ana', count: '23/24' },
+];
+
+bot.callbackQuery(/^nav:demo:(prev|next):(\d+)$/, async (ctx) => {
+  const direction = ctx.match![1];
+  const currentIdx = Number(ctx.match![2]);
+  let newIdx = direction === 'next' ? currentIdx + 1 : currentIdx - 1;
+  if (newIdx >= demoSamples.length) newIdx = 0;
+  if (newIdx < 0) newIdx = demoSamples.length - 1;
+
+  const s = demoSamples[newIdx];
+  const deadline = '01:00';
+  const text = `🌏 ${s.city}에서 ${s.name}님이 보낸 정이 도착했습니다! (${s.count})\n\n⏰ 남은 시간: 60분\n${deadline}까지 정을 이어붙이지 않으면 이 메시지는 자동 삭제됩니다.`;
+
+  const kb = new InlineKeyboard()
+    .text('✍️ 이어쓰기', `write:demo:${newIdx}`)
+    .row()
+    .text('◀️', `nav:demo:prev:${newIdx}`)
+    .text(`${newIdx + 1}/${demoSamples.length}`, 'nav:info')
+    .text('▶️', `nav:demo:next:${newIdx}`);
+
+  try {
+    await ctx.editMessageText(text, { reply_markup: kb });
+  } catch {}
+
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery(/^nav:(prev|next):(\d+):(\d+)$/, async (ctx) => {
+  const direction = ctx.match![1];
+  const userId = Number(ctx.match![2]);
+  const currentIdx = Number(ctx.match![3]);
+  const user = getUser(userId);
+  if (!user) return ctx.answerCallbackQuery();
+
+  const allChains = findAllChainsForUser(userId, user.tz_offset);
+  if (allChains.length === 0) return ctx.answerCallbackQuery();
+
+  let newIdx = direction === 'next' ? currentIdx + 1 : currentIdx - 1;
+  if (newIdx >= allChains.length) newIdx = 0;
+  if (newIdx < 0) newIdx = allChains.length - 1;
+
+  const chain = allChains[newIdx];
+  const { text, kb, lastBlock: lb } = buildArrivalMessage(chain, user, newIdx, allChains.length);
+
+  try {
+    // Update text message
+    await ctx.editMessageText(text, { reply_markup: kb });
+
+    // If chain has photo, send new photo (can't edit photo in existing message)
+    if (lb?.media_type === 'photo' && lb?.media_url) {
+      const blockCreated = new Date(lb.created_at + 'Z');
+      const localBlock = new Date(blockCreated.getTime() + lb.tz_offset * 60 * 60 * 1000);
+      const dateStr = `${localBlock.getUTCFullYear()}.${String(localBlock.getUTCMonth()+1).padStart(2,'0')}.${String(localBlock.getUTCDate()).padStart(2,'0')}`;
+      const timeStr = `${String(localBlock.getUTCHours()).padStart(2,'0')}:${String(localBlock.getUTCMinutes()).padStart(2,'0')}`;
+      const tzStr = `UTC${lb.tz_offset >= 0 ? '+' : ''}${lb.tz_offset}`;
+      await sendPhoto(bot, user.telegram_id, lb.media_url, `🕐 ${dateStr} ${timeStr} (${tzStr})`);
+    }
+  } catch { /* edit might fail if message unchanged */ }
+
+  await ctx.answerCallbackQuery();
+});
 
 async function notifyChainComplete(chainId: number) {
   const chain = getChain(chainId);
@@ -680,5 +826,5 @@ async function mintCompletionNFT(chainId: number) {
 // ═══════════════════════════════════════
 
 bot.start({
-  onStart: () => console.log('🌏 정봇 v6 started!'),
+  onStart: () => console.log('🌏 정봇 v7 started!'),
 });

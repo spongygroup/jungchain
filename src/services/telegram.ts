@@ -75,6 +75,31 @@ export async function getPhotoBase64(bot: Bot, fileId: string): Promise<string> 
   return buffer.toString('base64');
 }
 
+// ─── Send voice with retry ───
+export async function sendVoice(
+  bot: Bot,
+  chatId: number,
+  voice: string, // file_id
+  caption?: string,
+): Promise<number | null> {
+  return retry(async () => {
+    const sent = await bot.api.sendVoice(chatId, voice, caption ? { caption } : undefined);
+    return sent.message_id;
+  });
+}
+
+// ─── Download file from Telegram → Buffer ───
+export async function getFileBuffer(bot: Bot, fileId: string): Promise<Buffer> {
+  const file = await bot.api.getFile(fileId);
+  const filePath = file.file_path;
+  if (!filePath) throw new Error('Could not get file path');
+
+  const token = bot.token;
+  const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+  const res = await fetch(url);
+  return Buffer.from(await res.arrayBuffer());
+}
+
 // ─── Get largest photo from message ───
 export function getLargestPhotoId(photos: any[]): string | null {
   if (!photos || photos.length === 0) return null;
