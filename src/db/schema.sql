@@ -1,11 +1,15 @@
--- Jung Bot v6 Schema
+-- Jung Bot v7 Schema
 
 CREATE TABLE IF NOT EXISTS users (
   telegram_id   INTEGER PRIMARY KEY,
   username      TEXT,
   first_name    TEXT,
   tz_offset     INTEGER NOT NULL,          -- -11 ~ +12
-  notify_hour   INTEGER NOT NULL,          -- 0~23 (local hour)
+  notify_hour   INTEGER NOT NULL DEFAULT 9, -- legacy (kept for compat)
+  notify_hours  TEXT DEFAULT '[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]', -- JSON array of local hours
+  notify_changed_at TEXT,                  -- ISO timestamp, cooldown for notify changes
+  daily_starts  INTEGER DEFAULT 0,         -- chains started today
+  daily_starts_date TEXT,                  -- YYYY-MM-DD for daily_starts counter
   lang          TEXT DEFAULT 'en',         -- telegram language_code
   city          TEXT,                       -- reverse geocoded city name
   wallet_address TEXT,                     -- CDP server wallet (auto-created)

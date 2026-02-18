@@ -22,6 +22,8 @@ import db, {
   getExpiredAssignments, findNextChainForUser,
   findAllChainsForUser, getChainsForTzAtHour, getUsersByTzOffset,
   getChainsToDeliver, markDelivered,
+  getUserNotifyHours, setUserNotifyHours, canChangeNotifyHours,
+  incrementDailyStarts, getDailyStarts,
 } from './db/database.js';
 
 // ─── Bot Init ───
@@ -67,13 +69,39 @@ function getFlag(offset: number): string {
 bot.command('start', async (ctx) => {
   const lang = getLang(ctx);
   const name = ctx.from?.first_name ?? 'Friend';
-  const btnText = await tAsync(lang, 'share_location');
-  const welcomeText = await tAsync(lang, 'welcome', { name });
-  const kb = new Keyboard()
-    .requestLocation(btnText)
-    .resized().oneTime();
-  await ctx.reply(welcomeText, { reply_markup: kb });
+  await showMenu(ctx, lang, name);
 });
+
+// /menu command
+bot.command('menu', async (ctx) => {
+  const lang = getLang(ctx);
+  const name = ctx.from?.first_name ?? 'Friend';
+  await showMenu(ctx, lang, name);
+});
+
+async function showMenu(ctx: any, lang: string, name: string) {
+  const kb = new InlineKeyboard()
+    .text(t(lang, 'btn_new_chain'), 'menu:new')
+    .row()
+    .text(t(lang, 'btn_notify_settings'), 'menu:notify')
+    .row()
+    .text(t(lang, 'btn_my_chains'), 'menu:mychains');
+  await ctx.reply(t(lang, 'start_menu', { name }), { reply_markup: kb });
+}
+
+// Track pending action before setup
+const pendingAction = new Map<number, string>();
+
+// Helper: require location setup, returns true if user needs setup
+async function requireSetup(ctx: any, lang: string, action?: string): Promise<boolean> {
+  const user = getUser(ctx.from!.id);
+  if (user) return false;
+  if (action) pendingAction.set(ctx.from!.id, action);
+  const btnText = t(lang, 'share_location');
+  const kb = new Keyboard().requestLocation(btnText).resized().oneTime();
+  await ctx.reply(t(lang, 'setup_first'), { reply_markup: kb });
+  return true;
+}
 
 // Location received → confirm city
 bot.on('message:location', async (ctx) => {
@@ -104,44 +132,17 @@ bot.callbackQuery('retry_loc', async (ctx) => {
   await ctx.answerCallbackQuery();
 });
 
-// Location confirmed → hour picker
+// Location confirmed → save user & show menu
 bot.callbackQuery(/^confirm_loc:/, async (ctx) => {
   const parts = ctx.callbackQuery.data.split(':');
-  const offset = Number(parts[1]);
-  const city = decodeURIComponent(parts.slice(2).join(':'));
-  await showHourPicker(ctx, offset, city);
-  await ctx.answerCallbackQuery();
-});
-
-async function showHourPicker(ctx: any, offset: number, city: string) {
-  const lang = getLang(ctx);
-  const kb = new InlineKeyboard();
-  const hours = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
-  for (let i = 0; i < hours.length; i += 3) {
-    for (const h of hours.slice(i, i + 3)) {
-      kb.text(`${h}:00`, `hour:${offset}:${h}:${encodeURIComponent(city)}`);
-    }
-    kb.row();
-  }
-  const sign = offset >= 0 ? '+' : '';
-  const text = t(lang, 'pick_hour', { city, sign, offset });
-  try { await ctx.editMessageText(text, { reply_markup: kb }); } catch {
-    await ctx.reply(text, { reply_markup: kb });
-  }
-}
-
-// Hour selected → save user
-bot.callbackQuery(/^hour:/, async (ctx) => {
-  const parts = ctx.callbackQuery.data.split(':');
   const tzOffset = Number(parts[1]);
-  const notifyHour = Number(parts[2]);
-  const city = decodeURIComponent(parts.slice(3).join(':'));
-  const from = ctx.from;
+  const city = decodeURIComponent(parts.slice(2).join(':'));
+  const from = ctx.from!;
   const lang = getLang(ctx);
+  const defaultNotifyHour = 9;
 
-  upsertUser(from.id, from.username, from.first_name, tzOffset, notifyHour, from.language_code, city);
+  upsertUser(from.id, from.username, from.first_name, tzOffset, defaultNotifyHour, from.language_code, city);
 
-  // Create or restore CDP wallet
   createWallet(from.id).then(({ address, isNew }) => {
     setUserWallet(from.id, address);
     console.log(`  🔑 Wallet ${isNew ? 'created' : 'restored'} for ${from.id}: ${address.slice(0, 10)}...`);
@@ -151,10 +152,15 @@ bot.callbackQuery(/^hour:/, async (ctx) => {
 
   const sign = tzOffset >= 0 ? '+' : '';
   await ctx.editMessageText(
-    t(lang, 'setup_done', { name: from.first_name, city, sign, offset: tzOffset, hour: notifyHour })
+    t(lang, 'setup_done', { name: from.first_name, city, sign, offset: tzOffset, hour: defaultNotifyHour })
   );
   await ctx.answerCallbackQuery('🎉');
+
+  // Show menu after setup
+  await showMenu(ctx, lang, from.first_name);
 });
+
+// (hour picker removed — notify hour defaults to 9, changeable from menu)
 
 // ═══════════════════════════════════════
 // DEV: TEST ONBOARDING (skip location)
@@ -190,7 +196,165 @@ bot.command('devstart', async (ctx) => {
 bot.callbackQuery(/^devtz:/, async (ctx) => {
   const offset = Number(ctx.callbackQuery.data.split(':')[1]);
   const city = getCity(offset);
-  await showHourPicker(ctx, offset, city);
+  const from = ctx.from!;
+  const lang = getLang(ctx);
+  const defaultNotifyHour = 9;
+
+  upsertUser(from.id, from.username, from.first_name, offset, defaultNotifyHour, from.language_code, city);
+
+  const sign = offset >= 0 ? '+' : '';
+  await ctx.editMessageText(
+    t(lang, 'setup_done', { name: from.first_name, city, sign, offset, hour: defaultNotifyHour })
+  );
+  await ctx.answerCallbackQuery('🎉');
+  await showMenu(ctx, lang, from.first_name);
+});
+
+// ═══════════════════════════════════════
+// START MENU CALLBACKS
+// ═══════════════════════════════════════
+
+// Track users waiting to create a new chain (content-first)
+const pendingNewChain = new Set<number>();
+
+bot.callbackQuery('menu:new', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const lang = getLang(ctx);
+  const user = getUser(ctx.from!.id);
+  if (!user) return requireSetup(ctx, lang, 'menu:new');
+
+  // Daily start limit check (don't increment yet)
+  const count = getDailyStarts(user.telegram_id);
+  if (count >= config.maxDailyStarts) {
+    return ctx.reply(t(lang, 'daily_limit_reached', { max: config.maxDailyStarts }));
+  }
+
+  const city = user.city || getCity(user.tz_offset);
+  const name = ctx.from?.first_name ?? 'Friend';
+
+  pendingNewChain.add(ctx.from!.id);
+  await ctx.reply(t(lang, 'new_free', { city, name }));
+});
+
+bot.callbackQuery('menu:notify', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const lang = getLang(ctx);
+  const user = getUser(ctx.from!.id);
+  if (!user) return requireSetup(ctx, lang, 'menu:notify');
+
+  if (!canChangeNotifyHours(user.telegram_id)) {
+    const currentHours = getUserNotifyHours(user.telegram_id);
+    const hourStr = currentHours.length > 0
+      ? currentHours.map(h => `${String(h).padStart(2, '0')}:00`).join(', ')
+      : '-';
+    return ctx.reply(t(lang, 'notify_hours_cooldown_with_current', { hours: hourStr }));
+  }
+
+  await showNotifyHoursGrid(ctx, user.telegram_id, lang);
+});
+
+bot.callbackQuery('menu:mychains', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const lang = getLang(ctx);
+  const user = getUser(ctx.from!.id);
+  if (!user) return requireSetup(ctx, lang, 'menu:mychains');
+
+  const chains = findAllChainsForUser(user.telegram_id, user.tz_offset);
+  // Also get chains the user created or participated in
+  const activeChains = getActiveChains().filter(c =>
+    c.creator_id === user.telegram_id || getAllBlocks(c.id).some((b: any) => b.user_id === user.telegram_id)
+  );
+
+  if (activeChains.length === 0) {
+    return ctx.reply(t(lang, 'my_chains_empty'));
+  }
+
+  let text = t(lang, 'my_chains_header');
+  for (const chain of activeChains) {
+    const count = getBlockCount(chain.id);
+    text += t(lang, 'my_chain_item', { id: chain.id, count, status: chain.status }) + '\n';
+  }
+  await ctx.reply(text);
+});
+
+// ═══════════════════════════════════════
+// NOTIFY HOURS GRID
+// ═══════════════════════════════════════
+
+async function showNotifyHoursGrid(ctx: any, telegramId: number, lang: string) {
+  const hours = getUserNotifyHours(telegramId);
+  const kb = new InlineKeyboard();
+
+  for (let row = 0; row < 6; row++) {
+    for (let col = 0; col < 4; col++) {
+      const h = row * 4 + col;
+      const isOn = hours.includes(h);
+      const label = isOn ? `✅ ${h}` : `${h}`;
+      kb.text(label, `nhr:${h}`);
+    }
+    kb.row();
+  }
+  kb.text(t(lang, 'notify_hours_done'), 'nhr:done');
+
+  const text = t(lang, 'notify_hours_title');
+  try {
+    await ctx.editMessageText(text, { reply_markup: kb });
+  } catch {
+    await ctx.reply(text, { reply_markup: kb });
+  }
+}
+
+bot.callbackQuery(/^nhr:(\d+)$/, async (ctx) => {
+  const hour = Number(ctx.match![1]);
+  const lang = getLang(ctx);
+  const telegramId = ctx.from!.id;
+
+  if (!canChangeNotifyHours(telegramId)) {
+    return ctx.answerCallbackQuery(t(lang, 'notify_hours_cooldown'));
+  }
+
+  const hours = pendingNotifyHours.get(telegramId) ?? [...getUserNotifyHours(telegramId)];
+  const idx = hours.indexOf(hour);
+  if (idx >= 0) {
+    hours.splice(idx, 1);
+  } else {
+    hours.push(hour);
+    hours.sort((a, b) => a - b);
+  }
+  pendingNotifyHours.set(telegramId, hours);
+
+  // Re-render grid with updated state
+  const kb = new InlineKeyboard();
+  for (let row = 0; row < 6; row++) {
+    for (let col = 0; col < 4; col++) {
+      const h = row * 4 + col;
+      const isOn = hours.includes(h);
+      const label = isOn ? `✅ ${h}` : `${h}`;
+      kb.text(label, `nhr:${h}`);
+    }
+    kb.row();
+  }
+  kb.text(t(lang, 'notify_hours_done'), 'nhr:done');
+
+  try {
+    await ctx.editMessageText(t(lang, 'notify_hours_title'), { reply_markup: kb });
+  } catch { /* unchanged */ }
+  await ctx.answerCallbackQuery();
+});
+
+const pendingNotifyHours = new Map<number, number[]>();
+
+bot.callbackQuery('nhr:done', async (ctx) => {
+  const lang = getLang(ctx);
+  const telegramId = ctx.from!.id;
+
+  const hours = pendingNotifyHours.get(telegramId);
+  if (hours) {
+    setUserNotifyHours(telegramId, hours);
+    pendingNotifyHours.delete(telegramId);
+  }
+
+  await ctx.editMessageText(t(lang, 'notify_hours_saved'));
   await ctx.answerCallbackQuery();
 });
 
@@ -201,20 +365,51 @@ bot.callbackQuery(/^devtz:/, async (ctx) => {
 bot.command('new', async (ctx) => {
   const lang = getLang(ctx);
   const user = getUser(ctx.from!.id);
-  if (!user) return ctx.reply(t(lang, 'setup_first'));
+  if (!user) return requireSetup(ctx, lang, 'menu:new');
 
-  const now = new Date();
+  const count = getDailyStarts(user.telegram_id);
+  if (count >= config.maxDailyStarts) {
+    return ctx.reply(t(lang, 'daily_limit_reached', { max: config.maxDailyStarts }));
+  }
+
   const city = user.city || getCity(user.tz_offset);
   const name = ctx.from?.first_name ?? 'Friend';
+
+  pendingNewChain.add(ctx.from!.id);
+  await ctx.reply(t(lang, 'new_free', { city, name }));
+});
+
+// Helper: create chain on first content
+function createChainFromContent(userId: number): { chainId: number; assignId: number; sameHour?: boolean } | null {
+  const user = getUser(userId);
+  if (!user) return null;
+
+  const now = new Date();
   const localHour = ((now.getUTCHours() + user.tz_offset) % 24 + 24) % 24;
 
-  const chainId = createChain(user.telegram_id, user.tz_offset, now.toISOString(), 'free', localHour);
-  const expiresAt = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
-  const assignId = createAssignment(user.telegram_id, chainId, 1, expiresAt);
+  // Check if user already created a chain this hour
+  const lastChain = db.prepare(
+    'SELECT created_at FROM chains WHERE creator_id = ? ORDER BY id DESC LIMIT 1'
+  ).get(userId) as any;
+  if (lastChain) {
+    const lastTime = new Date(lastChain.created_at);
+    const lastLocalHour = ((lastTime.getUTCHours() + user.tz_offset) % 24 + 24) % 24;
+    const lastDate = lastTime.toISOString().split('T')[0];
+    const todayDate = now.toISOString().split('T')[0];
+    if (lastDate === todayDate && lastLocalHour === localHour) {
+      return { chainId: 0, assignId: 0, sameHour: true };
+    }
+  }
 
-  await ctx.reply(t(lang, 'new_free', { city, name }));
-  scheduleExpiry(assignId, ctx.from!.id, 60 * 60 * 1000);
-});
+  const { allowed } = incrementDailyStarts(userId);
+  if (!allowed) return null;
+  const chainId = createChain(userId, user.tz_offset, now.toISOString(), 'free', localHour);
+  const expiresAt = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+  const assignId = createAssignment(userId, chainId, 1, expiresAt);
+
+  pendingNewChain.delete(userId);
+  return { chainId, assignId };
+}
 
 // ═══════════════════════════════════════
 // COMMANDS
@@ -232,7 +427,7 @@ bot.command('settings', async (ctx) => {
 bot.command('status', async (ctx) => {
   const lang = getLang(ctx);
   const user = getUser(ctx.from!.id);
-  if (!user) return ctx.reply(t(lang, 'setup_first'));
+  if (!user) return requireSetup(ctx, lang, 'menu:status');
   const city = getCity(user.tz_offset);
   const sign = user.tz_offset >= 0 ? '+' : '';
   const activeChains = getActiveChains().length;
@@ -262,7 +457,21 @@ bot.callbackQuery(/^write:/, async (ctx) => {
   const content = lastBlock?.content ? (lastBlock.content.length > 150 ? lastBlock.content.slice(0, 150) + '...' : lastBlock.content) : '';
   const city = lastBlock ? getCity(lastBlock.tz_offset) : '';
 
-  await ctx.editMessageText(t(lang, 'write_prompt', { slot: slotIndex, max: config.maxMessageLength }));
+  await ctx.reply(t(lang, 'write_prompt', { slot: slotIndex, max: config.maxMessageLength }));
+  await ctx.answerCallbackQuery();
+});
+
+// Format selected for relay write
+bot.callbackQuery(/^fmt:/, async (ctx) => {
+  const parts = ctx.callbackQuery.data.split(':');
+  const fmt = parts[1]; // text | photo | voice
+  const lang = getLang(ctx);
+  const messages: Record<string, Record<string, string>> = {
+    ko: { text: '📝 텍스트를 입력해주세요!', photo: '📷 사진을 보내주세요!', voice: '🎙 음성 메시지를 보내주세요!' },
+    en: { text: '📝 Send your text!', photo: '📷 Send a photo!', voice: '🎙 Send a voice message!' },
+  };
+  const l = lang === 'ko' ? 'ko' : 'en';
+  await ctx.editMessageText(messages[l][fmt] || messages.en[fmt]);
   await ctx.answerCallbackQuery();
 });
 
@@ -310,6 +519,38 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
+  // New chain: create on first content
+  if (pendingNewChain.has(userId)) {
+    const lang = getLang(ctx);
+    if (text.length > config.maxMessageLength) {
+      return ctx.reply(t(lang, 'too_long', { max: config.maxMessageLength, len: text.length }));
+    }
+
+    const user = getUser(userId);
+    if (!user) return;
+
+    const validation = await validateText(text);
+    if (!validation.safe) {
+      return ctx.reply(t(lang, 'content_blocked', { reason: validation.reason || '' }));
+    }
+
+    const result = createChainFromContent(userId);
+    if (!result) return ctx.reply(t(lang, 'daily_limit_reached', { max: config.maxDailyStarts }));
+    if (result.sameHour) return ctx.reply(t(lang, 'same_hour_limit'));
+
+    addBlock(result.chainId, 1, userId, user.tz_offset, text);
+    updateAssignment(result.assignId, 'written');
+    recordBlockOnchain(result.chainId, text, user.tz_offset, userId).catch(() => {});
+
+    const count = getBlockCount(result.chainId);
+    let nextTz = user.tz_offset - 1;
+    if (nextTz < -11) nextTz += 24;
+    const toCity = `UTC${nextTz >= 0 ? '+' : ''}${nextTz}`;
+    await ctx.reply(t(lang, 'jungzigi_pass', { comment: '정이 출발합니다! 🌏', count, fromCity: user.city || getCity(user.tz_offset), toCity }));
+    await rollNextChain(user);
+    return;
+  }
+
   const assignment = getPendingAssignment(userId);
   if (!assignment) return;
 
@@ -353,6 +594,49 @@ bot.on('message:text', async (ctx) => {
 
 bot.on('message:photo', async (ctx) => {
   const userId = ctx.from!.id;
+
+  // New chain: create on first photo
+  if (pendingNewChain.has(userId)) {
+    const lang = getLang(ctx);
+    const user = getUser(userId);
+    if (!user) return;
+
+    const photoId = getLargestPhotoId(ctx.message.photo);
+    if (!photoId) return;
+    const caption = ctx.message.caption?.trim() || '';
+
+    // Validate photo
+    await ctx.reply(t(lang, 'validating'));
+    const base64 = await getPhotoBase64(bot, photoId);
+    const validation = await aiValidatePhoto(base64, '');
+    if (validation.status === 'safety_fail') {
+      return ctx.reply(t(lang, 'content_blocked', { reason: validation.userMessage || '' }));
+    }
+    // Validate caption if present
+    if (caption) {
+      const textVal = await validateText(caption);
+      if (!textVal.safe) {
+        return ctx.reply(t(lang, 'content_blocked', { reason: textVal.reason || '' }));
+      }
+    }
+
+    const result = createChainFromContent(userId);
+    if (!result) return ctx.reply(t(lang, 'daily_limit_reached', { max: config.maxDailyStarts }));
+    if (result.sameHour) return ctx.reply(t(lang, 'same_hour_limit'));
+
+    addBlock(result.chainId, 1, userId, user.tz_offset, caption, photoId, 'photo');
+    updateAssignment(result.assignId, 'written');
+    recordBlockOnchain(result.chainId, caption, user.tz_offset, userId).catch(() => {});
+
+    const count = getBlockCount(result.chainId);
+    let nextTz = user.tz_offset - 1;
+    if (nextTz < -11) nextTz += 24;
+    const toCity = `UTC${nextTz >= 0 ? '+' : ''}${nextTz}`;
+    await ctx.reply(t(lang, 'jungzigi_pass', { comment: '정이 출발합니다! 🌏', count, fromCity: user.city || getCity(user.tz_offset), toCity }));
+    await rollNextChain(user);
+    return;
+  }
+
   const assignment = getPendingAssignment(userId);
   if (!assignment) return;
 
@@ -423,8 +707,48 @@ async function savePhotoBlock(
 
 bot.on('message:voice', async (ctx) => {
   const userId = ctx.from!.id;
-  const assignment = getPendingAssignment(userId);
   const lang = getLang(ctx);
+
+  // New chain: create on first voice
+  if (pendingNewChain.has(userId)) {
+    const user = getUser(userId);
+    if (!user) return;
+    const duration = ctx.message.voice.duration;
+    if (duration > config.maxVoiceDuration) {
+      return ctx.reply(t(lang, 'voice_too_long', { max: config.maxVoiceDuration }));
+    }
+
+    const fileId = ctx.message.voice.file_id;
+
+    // STT + validate
+    await ctx.reply(t(lang, 'validating'));
+    const buf = await getFileBuffer(bot, fileId);
+    const transcript = await transcribeVoice(buf);
+    if (transcript) {
+      const validation = await validateText(transcript);
+      if (!validation.safe) {
+        return ctx.reply(t(lang, 'content_blocked', { reason: validation.reason || '' }));
+      }
+    }
+
+    const result = createChainFromContent(userId);
+    if (!result) return ctx.reply(t(lang, 'daily_limit_reached', { max: config.maxDailyStarts }));
+    if (result.sameHour) return ctx.reply(t(lang, 'same_hour_limit'));
+
+    addBlock(result.chainId, 1, userId, user.tz_offset, transcript || '', fileId, 'voice');
+    updateAssignment(result.assignId, 'written');
+    recordBlockOnchain(result.chainId, transcript || '', user.tz_offset, userId).catch(() => {});
+
+    const count = getBlockCount(result.chainId);
+    let nextTz = user.tz_offset - 1;
+    if (nextTz < -11) nextTz += 24;
+    const toCity = `UTC${nextTz >= 0 ? '+' : ''}${nextTz}`;
+    await ctx.reply(t(lang, 'jungzigi_pass', { comment: '정이 출발합니다! 🌏', count, fromCity: user.city || getCity(user.tz_offset), toCity }));
+    await rollNextChain(user);
+    return;
+  }
+
+  const assignment = getPendingAssignment(userId);
 
   if (!assignment) {
     return ctx.reply(t(lang, 'voice_no_assignment'));
@@ -432,6 +756,12 @@ bot.on('message:voice', async (ctx) => {
 
   const user = getUser(userId);
   if (!user) return;
+
+  // Voice duration limit
+  const duration = ctx.message.voice.duration;
+  if (duration > config.maxVoiceDuration) {
+    return ctx.reply(t(lang, 'voice_too_long', { max: config.maxVoiceDuration, len: duration }));
+  }
 
   const voiceFileId = ctx.message.voice.file_id;
 
@@ -598,7 +928,10 @@ function buildArrivalMessage(chain: any, user: any, index: number, total: number
   const now = new Date();
   const localNow = new Date(now.getTime() + user.tz_offset * 60 * 60 * 1000);
   const currentHour = localNow.getUTCHours();
-  const deadlineStr = `${String((currentHour + 1) % 24).padStart(2, '0')}:00`;
+  const nextHour = (currentHour + 1) % 24;
+  const ampm = nextHour < 12 ? '오전' : '오후';
+  const h12 = nextHour === 0 ? 12 : nextHour > 12 ? nextHour - 12 : nextHour;
+  const deadlineStr = `${ampm} ${h12}시`;
   const text = t(lang, 'arrived', { count, city: prevCity, name: prevName, content: prevContent, deadline: deadlineStr });
 
   const kb = new InlineKeyboard()
@@ -824,6 +1157,14 @@ async function mintCompletionNFT(chainId: number) {
 // ═══════════════════════════════════════
 // START
 // ═══════════════════════════════════════
+
+bot.api.setMyCommands([
+  { command: 'start', description: '시작하기 / Start' },
+  { command: 'menu', description: '메뉴 열기 / Open menu' },
+  { command: 'new', description: '새 정 시작 / Start new chain' },
+  { command: 'settings', description: '설정 / Settings' },
+  { command: 'status', description: '내 상태 / My status' },
+]).catch(() => {});
 
 bot.start({
   onStart: () => console.log('🌏 정봇 v7 started!'),

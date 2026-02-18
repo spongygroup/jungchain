@@ -13,6 +13,20 @@ db.pragma('foreign_keys = ON');
 const schema = readFileSync(join(__dirname, 'schema.sql'), 'utf-8');
 db.exec(schema);
 
+// v7 migration: add new columns if missing
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN notify_hours TEXT DEFAULT '[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]'`);
+} catch { /* column already exists */ }
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN notify_changed_at TEXT`);
+} catch { /* column already exists */ }
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN daily_starts INTEGER DEFAULT 0`);
+} catch { /* column already exists */ }
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN daily_starts_date TEXT`);
+} catch { /* column already exists */ }
+
 export default db;
 
 // ─── Translation Cache ───
@@ -34,13 +48,14 @@ export function upsertUser(
   telegramId: number, username: string | undefined, firstName: string | undefined,
   tzOffset: number, notifyHour: number, lang?: string, city?: string,
 ) {
+  const defaultHours = JSON.stringify([8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]);
   db.prepare(`
-    INSERT INTO users (telegram_id, username, first_name, tz_offset, notify_hour, lang, city)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO users (telegram_id, username, first_name, tz_offset, notify_hour, notify_hours, lang, city)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(telegram_id) DO UPDATE SET
       username = excluded.username, first_name = excluded.first_name,
       tz_offset = excluded.tz_offset, notify_hour = excluded.notify_hour, lang = excluded.lang, city = excluded.city
-  `).run(telegramId, username ?? null, firstName ?? null, tzOffset, notifyHour, lang ?? 'en', city ?? null);
+  `).run(telegramId, username ?? null, firstName ?? null, tzOffset, notifyHour, defaultHours, lang ?? 'en', city ?? null);
 }
 
 export function setUserWallet(telegramId: number, walletAddress: string) {
@@ -52,9 +67,63 @@ export function getUser(telegramId: number) {
 }
 
 export function getUsersByNotifyHour(utcHour: number): any[] {
-  return db.prepare(`
-    SELECT * FROM users WHERE ((? + tz_offset + 24) % 24) = notify_hour
-  `).all(utcHour) as any[];
+  // Get all users, then filter by notify_hours JSON array
+  const allUsers = db.prepare('SELECT * FROM users').all() as any[];
+  return allUsers.filter(u => {
+    const localHour = ((utcHour + u.tz_offset) % 24 + 24) % 24;
+    try {
+      const hours: number[] = JSON.parse(u.notify_hours || '[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]');
+      return hours.includes(localHour);
+    } catch {
+      return localHour === u.notify_hour;
+    }
+  });
+}
+
+export function getUserNotifyHours(telegramId: number): number[] {
+  const user = getUser(telegramId);
+  if (!user) return [8,9,10,11,12,13,14,15,16,17,18,19,20,21,22];
+  try {
+    return JSON.parse(user.notify_hours || '[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]');
+  } catch {
+    return [8,9,10,11,12,13,14,15,16,17,18,19,20,21,22];
+  }
+}
+
+export function setUserNotifyHours(telegramId: number, hours: number[]) {
+  db.prepare('UPDATE users SET notify_hours = ?, notify_changed_at = datetime(\'now\') WHERE telegram_id = ?')
+    .run(JSON.stringify(hours), telegramId);
+}
+
+export function canChangeNotifyHours(telegramId: number): boolean {
+  const user = getUser(telegramId);
+  if (!user || !user.notify_changed_at) return true;
+  const changedAt = new Date(user.notify_changed_at + 'Z').getTime();
+  const now = Date.now();
+  return (now - changedAt) >= 24 * 60 * 60 * 1000;
+}
+
+export function incrementDailyStarts(telegramId: number): { count: number; allowed: boolean } {
+  const user = getUser(telegramId);
+  if (!user) return { count: 0, allowed: false };
+  const today = new Date().toISOString().split('T')[0];
+  let count = user.daily_starts || 0;
+  if (user.daily_starts_date !== today) {
+    count = 0;
+  }
+  if (count >= 3) return { count, allowed: false };
+  count += 1;
+  db.prepare('UPDATE users SET daily_starts = ?, daily_starts_date = ? WHERE telegram_id = ?')
+    .run(count, today, telegramId);
+  return { count, allowed: true };
+}
+
+export function getDailyStarts(telegramId: number): number {
+  const user = getUser(telegramId);
+  if (!user) return 0;
+  const today = new Date().toISOString().split('T')[0];
+  if (user.daily_starts_date !== today) return 0;
+  return user.daily_starts || 0;
 }
 
 // ─── Chains ───

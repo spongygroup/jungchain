@@ -10,7 +10,9 @@ export const config = {
   simUsersPerTz: Number(process.env.SIM_USERS_PER_TZ ?? '2'),
   dbPath: process.env.DB_PATH ?? './data/jung.db',
   logLevel: process.env.LOG_LEVEL ?? 'info',
-  maxMessageLength: 300,
+  maxMessageLength: 200,
+  maxVoiceDuration: 30,
+  maxDailyStarts: 3,
   chainSize: 24,
   // UTC offsets from +12 down to -11
   timezoneOffsets: Array.from({ length: 24 }, (_, i) => 12 - i),
