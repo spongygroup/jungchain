@@ -8,7 +8,8 @@ import 'dotenv/config';
 import { ethers } from 'ethers';
 import { makeChainId, createOnchainChain, recordBlock, mintSoulbound, isChainCompleted, explorerUrl, jungBlock } from '../src/services/onchain.js';
 
-const TZ_ORDER = [9, 10, 11, 12, -11, -10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8];
+// 서쪽으로: +9 → +8 → ... → 0 → -1 → ... → -11 → +12 → +11 → +10
+const TZ_ORDER = [9, 8, 7, 6, 5, 4, 3, 2, 1, 0, -1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, 12, 11, 10];
 
 const CITIES: Record<number, string> = {
   9: 'Seoul', 10: 'Sydney', 11: 'Noumea', 12: 'Auckland',
