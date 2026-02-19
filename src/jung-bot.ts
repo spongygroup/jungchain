@@ -165,6 +165,7 @@ function formatHour12(hour24: number): { ampm: string; hour12: number } {
 bot.command('start', async (ctx) => {
   const lang = getLang(ctx);
   const name = ctx.from?.first_name ?? 'Friend';
+  try { await ctx.deleteMessage(); } catch {}
   await showMenu(ctx, lang, name);
 });
 
@@ -172,6 +173,7 @@ bot.command('start', async (ctx) => {
 bot.command('menu', async (ctx) => {
   const lang = getLang(ctx);
   const name = ctx.from?.first_name ?? 'Friend';
+  try { await ctx.deleteMessage(); } catch {}
   await showMenu(ctx, lang, name);
 });
 
