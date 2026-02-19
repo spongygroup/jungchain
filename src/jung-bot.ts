@@ -96,14 +96,16 @@ function getLang(ctx: any): string {
   return resolveLang(ctx.from?.language_code);
 }
 
-// 10 target languages for city name pre-translation
-const CITY_I18N_LANGS = ['ko', 'en', 'ja', 'zh', 'th', 'es', 'pt', 'fr', 'ar', 'ru'] as const;
+// 17 target languages for city name pre-translation
+const CITY_I18N_LANGS = ['ko', 'en', 'ja', 'zh', 'th', 'es', 'pt', 'fr', 'ar', 'ru', 'de', 'it', 'tr', 'hi', 'id', 'vi', 'uk'] as const;
 
 // Language code → display name for translation API
 const LANG_NAMES: Record<string, string> = {
   ko: '한국어', en: 'English', ja: '日本語', zh: '中文',
   th: 'ภาษาไทย', es: 'Español', pt: 'Português', fr: 'Français',
-  ar: 'العربية', ru: 'Русский',
+  ar: 'العربية', ru: 'Русский', de: 'Deutsch', it: 'Italiano',
+  tr: 'Türkçe', hi: 'हिन्दी', id: 'Bahasa Indonesia', vi: 'Tiếng Việt',
+  uk: 'Українська',
 };
 
 // Pre-translate city name into 10 languages using reverseGeocode (lat/lon known)
