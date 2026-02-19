@@ -186,7 +186,7 @@ async function showMenu(ctx: any, lang: string, name: string) {
     .text(t(lang, 'btn_notify_settings'), 'menu:notify')
     .row()
     .text(t(lang, 'btn_my_chains'), 'menu:mychains');
-  await ctx.reply(t(lang, 'start_menu', { name }), { reply_markup: kb });
+  await ctx.reply('🌏 정(Jung) 메뉴', { reply_markup: kb });
 }
 
 // Track pending action before setup
@@ -351,7 +351,8 @@ bot.callbackQuery('menu:new', async (ctx) => {
   // Daily start limit check (don't increment yet)
   const count = getDailyStarts(user.telegram_id);
   if (count >= config.maxDailyStarts) {
-    return ctx.reply(t(lang, 'daily_limit_reached', { max: config.maxDailyStarts }));
+    await ctx.reply(t(lang, 'daily_limit_reached', { max: config.maxDailyStarts }));
+    return showMenu(ctx, lang, ctx.from?.first_name ?? 'Friend');
   }
 
   const city = user.city || getCity(user.tz_offset);
@@ -374,7 +375,8 @@ bot.callbackQuery('menu:arrived', async (ctx) => {
   ).all(ctx.from!.id) as any[];
 
   if (assignments.length === 0) {
-    return ctx.reply(t(lang, 'no_arrived'));
+    await ctx.reply(t(lang, 'no_arrived'));
+    return showMenu(ctx, lang, ctx.from?.first_name ?? 'Friend');
   }
 
   // Send header (same logic as rollNextChain)
@@ -407,7 +409,8 @@ bot.callbackQuery('menu:notify', async (ctx) => {
     const hourStr = currentHours.length > 0
       ? currentHours.map(h => `${String(h).padStart(2, '0')}:00`).join(', ')
       : '-';
-    return ctx.reply(t(lang, 'notify_hours_cooldown_with_current', { hours: hourStr }));
+    await ctx.reply(t(lang, 'notify_hours_cooldown_with_current', { hours: hourStr }));
+    return showMenu(ctx, lang, ctx.from?.first_name ?? 'Friend');
   }
 
   await showNotifyHoursGrid(ctx, user.telegram_id, lang);
@@ -426,7 +429,8 @@ bot.callbackQuery('menu:mychains', async (ctx) => {
   ).all(user.telegram_id) as any[];
 
   if (myChains.length === 0) {
-    return ctx.reply(t(lang, 'my_chains_empty', { name: user.first_name ?? ctx.from?.first_name }));
+    await ctx.reply(t(lang, 'my_chains_empty', { name: user.first_name ?? ctx.from?.first_name }));
+    return showMenu(ctx, lang, ctx.from?.first_name ?? 'Friend');
   }
 
   const activeChains = myChains.filter(c => c.status === 'active');
@@ -483,6 +487,7 @@ bot.callbackQuery('menu:mychains', async (ctx) => {
   }
 
   await ctx.reply(text);
+  await showMenu(ctx, lang, ctx.from?.first_name ?? 'Friend');
 });
 
 // ═══════════════════════════════════════
@@ -564,6 +569,7 @@ bot.callbackQuery('nhr:done', async (ctx) => {
 
   await ctx.editMessageText(t(lang, 'notify_hours_saved'));
   await ctx.answerCallbackQuery();
+  await showMenu(ctx, lang, ctx.from?.first_name ?? 'Friend');
 });
 
 // ═══════════════════════════════════════
