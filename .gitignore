@@ -23,4 +23,7 @@ data/build-html.cjs
 artifacts/
 cache/
 
+jung.db
+memory/
+
 .DS_Store

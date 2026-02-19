@@ -63,9 +63,10 @@ Human이 행동하고, AI가 돕고, Blockchain이 기록합니다.
 
 ## 팀
 
-- **스펀지그룹** — AI 콘텐츠 코디네이터 서비스 Beanie 운영 중 (beanie.spongygroup.com)
+- **스펀지그룹** — AI 콘텐츠 코디네이터 서비스 [Beanie](https://beanie.spongygroup.com) 운영 중
 - 팀원 3명 중 본 프로젝트 풀타임: 1명 (Jay Black) + AI 에이전트 Beanie (OpenClaw 기반)
 - 사람과 AI가 함께 만드는 프로젝트입니다
+- Instagram: https://www.instagram.com/beanie_ai/
 
 ## 링크
 
