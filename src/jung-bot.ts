@@ -136,6 +136,19 @@ async function buildCityI18nFromName(cityName: string): Promise<Record<string, s
 
 // getFlag imported from config.ts
 
+// ─── Block timestamp helper (e.g. "2026.02.18 23:34 (UTC+9)") ───
+function formatBlockTimestamp(createdAt: string, tzOffset: number): string {
+  const utcTime = new Date(createdAt + (createdAt.endsWith('Z') ? '' : 'Z'));
+  const localTime = new Date(utcTime.getTime() + tzOffset * 60 * 60 * 1000);
+  const y = localTime.getUTCFullYear();
+  const m = String(localTime.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(localTime.getUTCDate()).padStart(2, '0');
+  const h = String(localTime.getUTCHours()).padStart(2, '0');
+  const min = String(localTime.getUTCMinutes()).padStart(2, '0');
+  const sign = tzOffset >= 0 ? '+' : '';
+  return `${y}.${m}.${d} ${h}:${min} (UTC${sign}${tzOffset})`;
+}
+
 // ─── 12-hour time helper ───
 function formatHour12(hour24: number): { ampm: string; hour12: number } {
   const h = ((hour24 % 24) + 24) % 24;
@@ -1003,9 +1016,15 @@ async function sendArrivalForAssignment(user: any, assignment: any, remaining: n
   }
 
   const prevCity = `${prevFlag} ${translatedCity || rawCity}`;
-  const caption = rawCaption && translatedCaption && translatedCaption !== rawCaption
+
+  // Build caption with timestamp
+  const timestamp = lastBlock ? `📷 ${formatBlockTimestamp(lastBlock.created_at, lastBlock.tz_offset)}` : '';
+  let caption = rawCaption && translatedCaption && translatedCaption !== rawCaption
     ? `${rawCaption}\n\n${translatedCaption}`
     : rawCaption;
+  if (timestamp) {
+    caption = caption ? `${caption}\n\n${timestamp}` : timestamp;
+  }
 
   // Message 2: sender info
   const msg2Id = await sendText(bot, chatId, t(lang, 'arrival_sender', { city: prevCity, name: prevName, slot }));
@@ -1098,7 +1117,8 @@ async function notifyChainComplete(chainId: number) {
     const flag = getFlag(b.tz_offset);
     const city = getCity(b.tz_offset);
     const short = b.content.length > 80 ? b.content.slice(0, 80) + '...' : b.content;
-    summary += `${b.slot_index}/24 ${flag} ${city}\n"${short}"\n\n`;
+    const ts = formatBlockTimestamp(b.created_at, b.tz_offset);
+    summary += `${b.slot_index}/24 ${flag} ${city} · ${ts}\n"${short}"\n\n`;
   }
 
   try {
