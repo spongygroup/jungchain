@@ -76,14 +76,20 @@ ${CHOICE_FORMAT}`;
   }
 }
 
-// ─── Translate relay content ───
+// ─── Translate relay content (with in-memory cache) ───
+const translateCache = new Map<string, string>();
+
 export async function translateContent(
   content: string[],
   targetLang: string,
 ): Promise<string> {
   if (content.length === 0) return '';
-  const model = getModel();
   const text = content.join('\n');
+  const cacheKey = `${targetLang}::${text}`;
+  const cached = translateCache.get(cacheKey);
+  if (cached) return cached;
+
+  const model = getModel('gemini-2.0-flash');
 
   try {
     const result = await model.generateContent({
@@ -93,7 +99,9 @@ export async function translateContent(
 - 번역만 출력. 설명 없이.`,
       contents: [{ role: 'user', parts: [{ text: `다음을 ${targetLang}(으)로 번역해줘:\n\n${text}` }] }],
     });
-    return result.response.text().trim();
+    const translated = result.response.text().trim();
+    translateCache.set(cacheKey, translated);
+    return translated;
   } catch (err: any) {
     console.error(`Translation error: ${err.message}`);
     return `(번역 실패)\n${text}`;
