@@ -26,6 +26,9 @@ try {
 try {
   db.exec(`ALTER TABLE users ADD COLUMN daily_starts_date TEXT`);
 } catch { /* column already exists */ }
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN city_i18n TEXT`);
+} catch { /* column already exists */ }
 
 export default db;
 
@@ -60,6 +63,10 @@ export function upsertUser(
 
 export function setUserWallet(telegramId: number, walletAddress: string) {
   db.prepare('UPDATE users SET wallet_address = ? WHERE telegram_id = ?').run(walletAddress, telegramId);
+}
+
+export function updateCityI18n(telegramId: number, cityI18n: Record<string, string>) {
+  db.prepare('UPDATE users SET city_i18n = ? WHERE telegram_id = ?').run(JSON.stringify(cityI18n), telegramId);
 }
 
 export function getUser(telegramId: number) {

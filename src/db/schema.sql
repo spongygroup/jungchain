@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
   lang          TEXT DEFAULT 'en',         -- telegram language_code
   city          TEXT,                       -- reverse geocoded city name
   wallet_address TEXT,                     -- CDP server wallet (auto-created)
+  city_i18n     TEXT,                      -- JSON: {"ko":"성남시","en":"Seongnam",...}
   created_at    TEXT DEFAULT (datetime('now'))
 );
 

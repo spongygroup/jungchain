@@ -6,16 +6,16 @@
 import 'dotenv/config';
 import { Bot, InlineKeyboard, Keyboard } from 'grammy';
 import cron from 'node-cron';
-import { config, getCity, TZ_LANGUAGES } from './config.js';
-import { t, tAsync, resolveLang } from './services/i18n.js';
+import { config, getCity, getFlag } from './config.js';
+import { t, resolveLang } from './services/i18n.js';
 import { locationToOffset, reverseGeocode } from './services/geo.js';
-import { validatePhoto as aiValidatePhoto, validateText, transcribeVoice, translateContent } from './services/ai.js';
-import { sendText, sendPhoto, sendVoice, deleteMessage, getPhotoBase64, getFileBuffer, getLargestPhotoId } from './services/telegram.js';
+import { validatePhoto as aiValidatePhoto, validateText, translateContent } from './services/ai.js';
+import { sendText, deleteMessage, getPhotoBase64, getLargestPhotoId } from './services/telegram.js';
 import { makeChainId, recordBlock, mintSoulbound, createOnchainChain, explorerUrl } from './services/onchain.js';
 import { createWallet } from './services/wallet.js';
 import { ethers } from 'ethers';
 import db, {
-  upsertUser, getUser, getUsersByNotifyHour, setUserWallet,
+  upsertUser, getUser, getUsersByNotifyHour, setUserWallet, updateCityI18n,
   createChain, getChain, getActiveChains, completeChain,
   addBlock, getLastBlock, getBlockCount, getAllBlocks,
   createAssignment, getPendingAssignment, updateAssignment,
@@ -43,6 +43,52 @@ const ENABLE_ONCHAIN = process.env.ENABLE_ONCHAIN === 'true';
 
 // Pending mission input (photo mode)
 const pendingMission = new Map<number, { mode: string; city: string; localHour: number; now: string }>();
+// Pending photo: waiting for description text after photo upload
+const pendingPhoto = new Map<number, { photoId: string; chatId: number; assignmentId?: number; isNewChain: boolean }>();
+// Track arrival message IDs per user (structured for selective cleanup)
+const pendingArrivalMessages = new Map<number, { msg2Id: number | null; msg3Id: number | null; msg4Id: number | null }>();
+// Track write-flow auxiliary message IDs (write prompt, caption prompt)
+const pendingWriteMessages = new Map<number, number[]>();
+
+function storeArrivalMessages(userId: number, msgIds: { msg2Id: number | null; msg3Id: number | null; msg4Id: number | null }) {
+  pendingArrivalMessages.set(userId, msgIds);
+}
+
+function trackWriteMessage(userId: number, msgId: number) {
+  const ids = pendingWriteMessages.get(userId) ?? [];
+  ids.push(msgId);
+  pendingWriteMessages.set(userId, ids);
+}
+
+// Skip: delete ALL arrival messages (photo included)
+async function deleteArrivalMessages(userId: number) {
+  const msgs = pendingArrivalMessages.get(userId);
+  if (!msgs) return;
+  pendingArrivalMessages.delete(userId);
+  for (const msgId of [msgs.msg2Id, msgs.msg3Id, msgs.msg4Id]) {
+    if (msgId) try { await bot.api.deleteMessage(userId, msgId); } catch { /* already deleted */ }
+  }
+}
+
+// Write complete: keep sender info (msg2) + photo (msg3), remove buttons; delete msg4, write-flow messages
+async function cleanupAfterWrite(userId: number) {
+  const msgs = pendingArrivalMessages.get(userId);
+  if (msgs) {
+    pendingArrivalMessages.delete(userId);
+    // Delete skip warning only (keep msg2 sender info)
+    if (msgs.msg4Id) try { await bot.api.deleteMessage(userId, msgs.msg4Id); } catch {}
+    // Remove buttons from photo message (keep photo + caption)
+    if (msgs.msg3Id) try { await bot.api.editMessageReplyMarkup(userId, msgs.msg3Id, { reply_markup: { inline_keyboard: [] } }); } catch {}
+  }
+  // Delete write prompt + caption prompt
+  const writeIds = pendingWriteMessages.get(userId);
+  if (writeIds) {
+    pendingWriteMessages.delete(userId);
+    for (const msgId of writeIds) {
+      try { await bot.api.deleteMessage(userId, msgId); } catch {}
+    }
+  }
+}
 // Track prevBlockHash per chain (in-memory, resets on restart)
 const chainBlockHashes = new Map<number, string>();
 
@@ -50,16 +96,50 @@ function getLang(ctx: any): string {
   return resolveLang(ctx.from?.language_code);
 }
 
-// ─── TZ flags ───
-const TZ_FLAGS: Record<number, string> = {
-  12: '🇳🇿', 11: '🇸🇧', 10: '🇦🇺', 9: '🇰🇷', 8: '🇹🇼', 7: '🇹🇭',
-  6: '🇧🇩', 5: '🇵🇰', 4: '🇦🇪', 3: '🇷🇺', 2: '🇪🇬', 1: '🇫🇷',
-  0: '🇬🇧', '-1': '🇵🇹', '-2': '🌊', '-3': '🇧🇷', '-4': '🇺🇸',
-  '-5': '🇺🇸', '-6': '🇺🇸', '-7': '🇺🇸', '-8': '🇺🇸', '-9': '🇺🇸',
-  '-10': '🇺🇸', '-11': '🇼🇸',
+// 10 target languages for city name pre-translation
+const CITY_I18N_LANGS = ['ko', 'en', 'ja', 'zh', 'th', 'es', 'pt', 'fr', 'ar', 'ru'] as const;
+
+// Language code → display name for translation API
+const LANG_NAMES: Record<string, string> = {
+  ko: '한국어', en: 'English', ja: '日本語', zh: '中文',
+  th: 'ภาษาไทย', es: 'Español', pt: 'Português', fr: 'Français',
+  ar: 'العربية', ru: 'Русский',
 };
-function getFlag(offset: number): string {
-  return TZ_FLAGS[offset] ?? '🌍';
+
+// Pre-translate city name into 10 languages using reverseGeocode (lat/lon known)
+async function buildCityI18nFromGeo(lat: number, lon: number): Promise<Record<string, string>> {
+  const results = await Promise.all(
+    CITY_I18N_LANGS.map(async (lang) => {
+      const city = await reverseGeocode(lat, lon, lang);
+      return [lang, city] as const;
+    })
+  );
+  return Object.fromEntries(results);
+}
+
+// Pre-translate a fixed city name into 10 languages using AI translation
+async function buildCityI18nFromName(cityName: string): Promise<Record<string, string>> {
+  const results = await Promise.all(
+    CITY_I18N_LANGS.map(async (lang) => {
+      try {
+        const translated = await translateContent([cityName], LANG_NAMES[lang]);
+        return [lang, translated] as const;
+      } catch {
+        return [lang, cityName] as const;
+      }
+    })
+  );
+  return Object.fromEntries(results);
+}
+
+// getFlag imported from config.ts
+
+// ─── 12-hour time helper ───
+function formatHour12(hour24: number): { ampm: string; hour12: number } {
+  const h = ((hour24 % 24) + 24) % 24;
+  const ampm = h < 12 ? '오전' : '오후';
+  const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return { ampm, hour12 };
 }
 
 // ═══════════════════════════════════════
@@ -83,6 +163,8 @@ async function showMenu(ctx: any, lang: string, name: string) {
   const kb = new InlineKeyboard()
     .text(t(lang, 'btn_new_chain'), 'menu:new')
     .row()
+    .text(t(lang, 'btn_arrived'), 'menu:arrived')
+    .row()
     .text(t(lang, 'btn_notify_settings'), 'menu:notify')
     .row()
     .text(t(lang, 'btn_my_chains'), 'menu:mychains');
@@ -91,6 +173,8 @@ async function showMenu(ctx: any, lang: string, name: string) {
 
 // Track pending action before setup
 const pendingAction = new Map<number, string>();
+// Track lat/lon for city i18n after location confirm
+const pendingLatLon = new Map<number, { lat: number; lon: number }>();
 
 // Helper: require location setup, returns true if user needs setup
 async function requireSetup(ctx: any, lang: string, action?: string): Promise<boolean> {
@@ -111,6 +195,7 @@ bot.on('message:location', async (ctx) => {
   const offset = locationToOffset(latitude, longitude);
   const city = await reverseGeocode(latitude, longitude, lang === 'ko' ? 'ko' : 'en');
   const sign = offset >= 0 ? '+' : '';
+  pendingLatLon.set(ctx.from!.id, { lat: latitude, lon: longitude });
 
   const kb = new InlineKeyboard()
     .text(t(lang, 'yes'), `confirm_loc:${offset}:${encodeURIComponent(city)}`)
@@ -149,6 +234,18 @@ bot.callbackQuery(/^confirm_loc:/, async (ctx) => {
   }).catch(err => {
     console.error(`  🔑 Wallet failed for ${from.id}: ${err.message}`);
   });
+
+  // Pre-translate city into 10 languages (async, non-blocking)
+  const latLon = pendingLatLon.get(from.id);
+  pendingLatLon.delete(from.id);
+  if (latLon) {
+    buildCityI18nFromGeo(latLon.lat, latLon.lon).then(cityI18n => {
+      updateCityI18n(from.id, cityI18n);
+      console.log(`  🌐 City i18n saved for ${from.id}: ${Object.keys(cityI18n).length} langs`);
+    }).catch(err => {
+      console.error(`  🌐 City i18n failed for ${from.id}: ${err.message}`);
+    });
+  }
 
   const sign = tzOffset >= 0 ? '+' : '';
   await ctx.editMessageText(
@@ -202,6 +299,14 @@ bot.callbackQuery(/^devtz:/, async (ctx) => {
 
   upsertUser(from.id, from.username, from.first_name, offset, defaultNotifyHour, from.language_code, city);
 
+  // Pre-translate city into 10 languages (async, non-blocking)
+  buildCityI18nFromName(city).then(cityI18n => {
+    updateCityI18n(from.id, cityI18n);
+    console.log(`  🌐 City i18n saved for ${from.id}: ${Object.keys(cityI18n).length} langs`);
+  }).catch(err => {
+    console.error(`  🌐 City i18n failed for ${from.id}: ${err.message}`);
+  });
+
   const sign = offset >= 0 ? '+' : '';
   await ctx.editMessageText(
     t(lang, 'setup_done', { name: from.first_name, city, sign, offset, hour: defaultNotifyHour })
@@ -236,6 +341,39 @@ bot.callbackQuery('menu:new', async (ctx) => {
   await ctx.reply(t(lang, 'new_free', { city, name }));
 });
 
+bot.callbackQuery('menu:arrived', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const lang = getLang(ctx);
+  const user = getUser(ctx.from!.id);
+  if (!user) return requireSetup(ctx, lang, 'menu:arrived');
+
+  // Get all pending assignments for this user (writing = already started, exclude)
+  const assignments = db.prepare(
+    "SELECT a.*, c.mode FROM assignments a JOIN chains c ON c.id = a.chain_id WHERE a.user_id = ? AND a.status = 'pending' ORDER BY a.assigned_at ASC"
+  ).all(ctx.from!.id) as any[];
+
+  if (assignments.length === 0) {
+    return ctx.reply(t(lang, 'no_arrived'));
+  }
+
+  // Send header (same logic as rollNextChain)
+  const now = new Date();
+  const localNow = new Date(now.getTime() + user.tz_offset * 60 * 60 * 1000);
+  const currentHour = localNow.getUTCHours();
+  const { ampm, hour12 } = formatHour12(currentHour);
+  const deadlineHour = (currentHour + 1) % 24;
+  const dl = formatHour12(deadlineHour);
+  const deadlineStr = `${dl.ampm} ${dl.hour12}시`;
+
+  await ctx.reply(t(lang, 'arrival_header', {
+    ampm, hour12, count: assignments.length, deadline: deadlineStr,
+  }));
+
+  // Send arrival UX for the first assignment
+  const msgIds = await sendArrivalForAssignment(user, assignments[0], assignments.length, lang);
+  storeArrivalMessages(ctx.from!.id, msgIds);
+});
+
 bot.callbackQuery('menu:notify', async (ctx) => {
   await ctx.answerCallbackQuery();
   const lang = getLang(ctx);
@@ -259,21 +397,67 @@ bot.callbackQuery('menu:mychains', async (ctx) => {
   const user = getUser(ctx.from!.id);
   if (!user) return requireSetup(ctx, lang, 'menu:mychains');
 
-  const chains = findAllChainsForUser(user.telegram_id, user.tz_offset);
-  // Also get chains the user created or participated in
-  const activeChains = getActiveChains().filter(c =>
-    c.creator_id === user.telegram_id || getAllBlocks(c.id).some((b: any) => b.user_id === user.telegram_id)
-  );
+  // Get all chains created by this user (active + completed)
+  const myChains = db.prepare(
+    "SELECT * FROM chains WHERE creator_id = ? ORDER BY created_at DESC"
+  ).all(user.telegram_id) as any[];
 
-  if (activeChains.length === 0) {
+  if (myChains.length === 0) {
     return ctx.reply(t(lang, 'my_chains_empty'));
   }
 
+  const activeChains = myChains.filter(c => c.status === 'active');
+  const completedChains = myChains.filter(c => c.status === 'completed');
+
   let text = t(lang, 'my_chains_header');
-  for (const chain of activeChains) {
-    const count = getBlockCount(chain.id);
-    text += t(lang, 'my_chain_item', { id: chain.id, count, status: chain.status }) + '\n';
+
+  if (activeChains.length > 0) {
+    text += t(lang, 'my_chains_active_section');
+    for (const chain of activeChains) {
+      const count = getBlockCount(chain.id);
+      const createdAt = new Date(chain.created_at + 'Z');
+      const localCreated = new Date(createdAt.getTime() + user.tz_offset * 60 * 60 * 1000);
+      const m = localCreated.getUTCMonth() + 1;
+      const d = localCreated.getUTCDate();
+      const h = localCreated.getUTCHours();
+      const { ampm, hour12 } = formatHour12(h);
+      const date = `${m}/${d} ${ampm} ${hour12}시`;
+      text += t(lang, 'my_chain_item_active', { id: chain.id, count, date }) + '\n';
+    }
   }
+
+  if (completedChains.length > 0) {
+    text += t(lang, 'my_chains_completed_section');
+    for (const chain of completedChains) {
+      const count = getBlockCount(chain.id);
+      // Start date
+      const createdAt = new Date(chain.created_at + 'Z');
+      const localCreated = new Date(createdAt.getTime() + user.tz_offset * 60 * 60 * 1000);
+      const sm = localCreated.getUTCMonth() + 1;
+      const sd = localCreated.getUTCDate();
+      const sh = localCreated.getUTCHours();
+      const sf = formatHour12(sh);
+      const startDate = `${sm}/${sd} ${sf.ampm} ${sf.hour12}시`;
+
+      // End date: last block's created_at
+      const lastBlockRow = db.prepare(
+        'SELECT MAX(created_at) as last_at FROM blocks WHERE chain_id = ?'
+      ).get(chain.id) as any;
+      let endDate = startDate;
+      if (lastBlockRow?.last_at) {
+        const lastAt = new Date(lastBlockRow.last_at + 'Z');
+        const localLast = new Date(lastAt.getTime() + user.tz_offset * 60 * 60 * 1000);
+        const em = localLast.getUTCMonth() + 1;
+        const ed = localLast.getUTCDate();
+        const eh = localLast.getUTCHours();
+        const ef = formatHour12(eh);
+        endDate = `${em}/${ed} ${ef.ampm} ${ef.hour12}시`;
+      }
+
+      text += t(lang, 'my_chain_item_completed', { id: chain.id, count, startDate, endDate }) + '\n';
+    }
+  }
+
   await ctx.reply(text);
 });
 
@@ -443,63 +627,86 @@ bot.command('status', async (ctx) => {
 
 bot.callbackQuery(/^write:/, async (ctx) => {
   const parts = ctx.callbackQuery.data.split(':');
-  const chainId = Number(parts[1]);
-  const slotIndex = Number(parts[2]);
+  const assignmentId = Number(parts[1]);
   const lang = getLang(ctx);
-  const chain = getChain(chainId);
-  if (!chain) return ctx.answerCallbackQuery('❌');
+  const userId = ctx.from!.id;
 
-  // Update assignment status to 'writing'
-  const assignment = getPendingAssignment(ctx.from!.id);
-  if (assignment) updateAssignment(assignment.id, 'writing');
+  // Find the assignment by ID and mark as writing
+  const assignment = db.prepare('SELECT * FROM assignments WHERE id = ?').get(assignmentId) as any;
+  if (!assignment) return ctx.answerCallbackQuery('❌');
+  updateAssignment(assignment.id, 'writing');
 
-  const lastBlock = getLastBlock(chainId);
-  const content = lastBlock?.content ? (lastBlock.content.length > 150 ? lastBlock.content.slice(0, 150) + '...' : lastBlock.content) : '';
-  const city = lastBlock ? getCity(lastBlock.tz_offset) : '';
-
-  await ctx.reply(t(lang, 'write_prompt', { slot: slotIndex, max: config.maxMessageLength }));
+  const wpMsg = await ctx.reply(t(lang, 'write_prompt', { slot: assignment.slot_index, max: config.maxMessageLength }));
+  trackWriteMessage(userId, wpMsg.message_id);
   await ctx.answerCallbackQuery();
 });
 
-// Format selected for relay write
-bot.callbackQuery(/^fmt:/, async (ctx) => {
-  const parts = ctx.callbackQuery.data.split(':');
-  const fmt = parts[1]; // text | photo | voice
-  const lang = getLang(ctx);
-  const messages: Record<string, Record<string, string>> = {
-    ko: { text: '📝 텍스트를 입력해주세요!', photo: '📷 사진을 보내주세요!', voice: '🎙 음성 메시지를 보내주세요!' },
-    en: { text: '📝 Send your text!', photo: '📷 Send a photo!', voice: '🎙 Send a voice message!' },
-  };
-  const l = lang === 'ko' ? 'ko' : 'en';
-  await ctx.editMessageText(messages[l][fmt] || messages.en[fmt]);
-  await ctx.answerCallbackQuery();
-});
+// (fmt: callback removed — photo-only format)
 
 bot.callbackQuery(/^skip:/, async (ctx) => {
   const parts = ctx.callbackQuery.data.split(':');
-  const assignmentId = Number(parts[2]);
+  const assignmentId = Number(parts[1]);
   const lang = getLang(ctx);
+  const userId = ctx.from!.id;
+
+  // Delete previous arrival messages
+  await deleteArrivalMessages(userId);
 
   updateAssignment(assignmentId, 'skipped');
   await ctx.answerCallbackQuery('⏭');
 
-  const user = getUser(ctx.from!.id);
-  if (user) {
-    await ctx.editMessageText(t(lang, 'skipped'));
-    await rollNextChain(user);
-  } else {
-    await ctx.editMessageText(t(lang, 'skipped'));
+  const user = getUser(userId);
+  if (!user) return;
+
+  // Check remaining pending assignments for this user
+  const remaining = db.prepare(
+    "SELECT a.*, c.mode FROM assignments a JOIN chains c ON c.id = a.chain_id WHERE a.user_id = ? AND a.status = 'pending' ORDER BY a.assigned_at ASC"
+  ).all(userId) as any[];
+
+  if (remaining.length === 0) {
+    pendingArrivalMessages.delete(userId);
+    await ctx.reply(t(lang, 'arrival_all_done'));
+    return;
   }
+
+  // Send messages 2,3,4 for the next assignment
+  const nextAssign = remaining[0];
+  const msgIds = await sendArrivalForAssignment(user, nextAssign, remaining.length, lang);
+  storeArrivalMessages(userId, msgIds);
 });
 
 // ═══════════════════════════════════════
 // TEXT / STORY INPUT
 // ═══════════════════════════════════════
 
+// /skip command — skip photo description
+bot.command('skip', async (ctx) => {
+  const userId = ctx.from!.id;
+  const pending = pendingPhoto.get(userId);
+  if (!pending) return;
+  pendingPhoto.delete(userId);
+
+  const lang = getLang(ctx);
+  await processPhotoWithDescription(ctx, userId, pending, '', lang);
+});
+
 bot.on('message:text', async (ctx) => {
   const userId = ctx.from!.id;
   const text = ctx.message.text.trim();
   if (text.startsWith('/')) return;
+
+  // Handle pending photo description
+  const pending = pendingPhoto.get(userId);
+  if (pending) {
+    const lang = getLang(ctx);
+    // Description length check
+    if (text.length > 200) {
+      return ctx.reply(t(lang, 'caption_too_long', { len: text.length }));
+    }
+    pendingPhoto.delete(userId);
+    await processPhotoWithDescription(ctx, userId, pending, text, lang);
+    return;
+  }
 
   // Handle pending mission input (photo mode)
   const missionState = pendingMission.get(userId);
@@ -519,73 +726,18 @@ bot.on('message:text', async (ctx) => {
     return;
   }
 
-  // New chain: create on first content
+  // New chain: text-only not allowed, require photo
   if (pendingNewChain.has(userId)) {
     const lang = getLang(ctx);
-    if (text.length > config.maxMessageLength) {
-      return ctx.reply(t(lang, 'too_long', { max: config.maxMessageLength, len: text.length }));
-    }
-
-    const user = getUser(userId);
-    if (!user) return;
-
-    const validation = await validateText(text);
-    if (!validation.safe) {
-      return ctx.reply(t(lang, 'content_blocked', { reason: validation.reason || '' }));
-    }
-
-    const result = createChainFromContent(userId);
-    if (!result) return ctx.reply(t(lang, 'daily_limit_reached', { max: config.maxDailyStarts }));
-    if (result.sameHour) return ctx.reply(t(lang, 'same_hour_limit'));
-
-    addBlock(result.chainId, 1, userId, user.tz_offset, text);
-    updateAssignment(result.assignId, 'written');
-    recordBlockOnchain(result.chainId, text, user.tz_offset, userId).catch(() => {});
-
-    const count = getBlockCount(result.chainId);
-    let nextTz = user.tz_offset - 1;
-    if (nextTz < -11) nextTz += 24;
-    const toCity = `UTC${nextTz >= 0 ? '+' : ''}${nextTz}`;
-    await ctx.reply(t(lang, 'jungzigi_pass', { comment: '정이 출발합니다! 🌏', count, fromCity: user.city || getCity(user.tz_offset), toCity }));
-    await rollNextChain(user);
-    return;
+    return ctx.reply(t(lang, 'photo_required'));
   }
 
+  // Relay: text-only not allowed, require photo
   const assignment = getPendingAssignment(userId);
   if (!assignment) return;
 
   const lang = getLang(ctx);
-  if (text.length > config.maxMessageLength) {
-    return ctx.reply(t(lang, 'too_long', { max: config.maxMessageLength, len: text.length }));
-  }
-
-  const user = getUser(userId);
-  if (!user) return;
-
-  // Photo caption redirect removed — caption is now optional (v7)
-
-  // Content validation
-  const validation = await validateText(text);
-  if (!validation.safe) {
-    return ctx.reply(t(lang, 'content_blocked', { reason: validation.reason || '' }));
-  }
-
-  addBlock(assignment.chain_id, assignment.slot_index, userId, user.tz_offset, text);
-  updateAssignment(assignment.id, 'written');
-
-  // On-chain record (async, non-blocking)
-  recordBlockOnchain(assignment.chain_id, text, user.tz_offset, userId).catch(() => {});
-
-  const count = getBlockCount(assignment.chain_id);
-  if (count >= 24) {
-    completeChain(assignment.chain_id);
-    await ctx.reply(t(lang, 'block_saved', { count }));
-  } else {
-    const chain = getChain(assignment.chain_id);
-    const nextHour = chain?.chain_hour ?? user.notify_hour;
-    await ctx.reply(t(lang, 'block_saved_next', { count, nextHour }));
-  }
-  await rollNextChain(user);
+  return ctx.reply(t(lang, 'photo_required'));
 });
 
 // ═══════════════════════════════════════
@@ -594,20 +746,49 @@ bot.on('message:text', async (ctx) => {
 
 bot.on('message:photo', async (ctx) => {
   const userId = ctx.from!.id;
+  const lang = getLang(ctx);
 
-  // New chain: create on first photo
+  // New chain: store photo, ask for description
   if (pendingNewChain.has(userId)) {
-    const lang = getLang(ctx);
-    const user = getUser(userId);
-    if (!user) return;
-
     const photoId = getLargestPhotoId(ctx.message.photo);
     if (!photoId) return;
-    const caption = ctx.message.caption?.trim() || '';
 
-    // Validate photo
-    await ctx.reply(t(lang, 'validating_photo'));
-    const base64 = await getPhotoBase64(bot, photoId);
+    pendingPhoto.set(userId, { photoId, chatId: ctx.chat.id, isNewChain: true });
+    await ctx.reply(t(lang, 'photo_description_ask'));
+    return;
+  }
+
+  // Relay: store photo, ask for description
+  const assignment = getPendingAssignment(userId);
+  if (!assignment) return;
+
+  const photoId = getLargestPhotoId(ctx.message.photo);
+  if (!photoId) return;
+
+  pendingPhoto.set(userId, { photoId, chatId: ctx.chat.id, assignmentId: assignment.id, isNewChain: false });
+  const capMsg = await ctx.reply(t(lang, 'photo_description_ask'));
+  trackWriteMessage(userId, capMsg.message_id);
+});
+
+// Helper: process photo after description is received (or skipped)
+async function processPhotoWithDescription(
+  ctx: any, userId: number,
+  pending: { photoId: string; chatId: number; assignmentId?: number; isNewChain: boolean },
+  caption: string, lang: string,
+) {
+  const user = getUser(userId);
+  if (!user) return;
+
+  // Show validating message
+  await ctx.reply(t(lang, 'validating_content'));
+
+  // Validate photo
+  const base64 = await getPhotoBase64(bot, pending.photoId);
+  const mission = '';
+  let jungzigiComment = '좋은 사진이네요! 📸';
+
+  if (pending.isNewChain) {
+    // New chain flow
     const validation = await aiValidatePhoto(base64, '');
     if (validation.status === 'safety_fail') {
       return ctx.reply(t(lang, 'content_blocked', { reason: validation.userMessage || '' }));
@@ -624,7 +805,7 @@ bot.on('message:photo', async (ctx) => {
     if (!result) return ctx.reply(t(lang, 'daily_limit_reached', { max: config.maxDailyStarts }));
     if (result.sameHour) return ctx.reply(t(lang, 'same_hour_limit'));
 
-    addBlock(result.chainId, 1, userId, user.tz_offset, caption, photoId, 'photo');
+    addBlock(result.chainId, 1, userId, user.tz_offset, caption, pending.photoId, 'photo');
     updateAssignment(result.assignId, 'written');
     recordBlockOnchain(result.chainId, caption, user.tz_offset, userId).catch(() => {});
 
@@ -633,45 +814,35 @@ bot.on('message:photo', async (ctx) => {
     if (nextTz < -11) nextTz += 24;
     const toCity = `UTC${nextTz >= 0 ? '+' : ''}${nextTz}`;
     await ctx.reply(t(lang, 'jungzigi_pass', { comment: '정이 출발합니다! 🌏', count, fromCity: user.city || getCity(user.tz_offset), toCity }));
-    await rollNextChain(user);
-    return;
-  }
+  } else {
+    // Relay flow
+    const assignment = pending.assignmentId
+      ? db.prepare('SELECT * FROM assignments WHERE id = ?').get(pending.assignmentId) as any
+      : getPendingAssignment(userId);
+    if (!assignment) return;
 
-  const assignment = getPendingAssignment(userId);
-  if (!assignment) return;
-
-  const lang = getLang(ctx);
-  const user = getUser(userId);
-  if (!user) return;
-
-  const photoId = getLargestPhotoId(ctx.message.photo);
-  if (!photoId) return;
-
-  // Step 1: 정지기 검증 중 메시지
-  await ctx.reply(t(lang, 'validating_photo'));
-
-  // Step 2: Validate photo (mission + safety + 정지기 comment)
-  let jungzigiComment = '좋은 사진이네요! 📸';
-  try {
-    const base64 = await getPhotoBase64(bot, photoId);
-    const validation = await aiValidatePhoto(base64, assignment.mission ?? '');
-    jungzigiComment = validation.jungzigiComment || jungzigiComment;
-
-    if (validation.status !== 'pass') {
-      await ctx.reply(t(lang, 'jungzigi_fail', { comment: jungzigiComment }));
-      return;
+    try {
+      const validation = await aiValidatePhoto(base64, assignment.mission ?? '');
+      jungzigiComment = validation.jungzigiComment || jungzigiComment;
+      if (validation.status !== 'pass') {
+        await ctx.reply(t(lang, 'jungzigi_fail', { comment: jungzigiComment }));
+        return;
+      }
+    } catch (err: any) {
+      console.error('Photo validation error:', err.message);
     }
-  } catch (err: any) {
-    console.error('Photo validation error:', err.message);
+
+    // Validate caption if present
+    if (caption) {
+      const textVal = await validateText(caption);
+      if (!textVal.safe) {
+        return ctx.reply(t(lang, 'content_blocked', { reason: textVal.reason || '' }));
+      }
+    }
+
+    await savePhotoBlock(ctx, assignment, userId, user, pending.photoId, caption, lang, jungzigiComment);
   }
-
-  // Step 3: Caption — use provided or ask
-  const caption = ctx.message.caption?.trim() || '';
-  await savePhotoBlock(ctx, assignment, userId, user, photoId, caption, lang, jungzigiComment);
-});
-
-// Store 정지기 comment between photo and caption
-const pendingJungzigiComment = new Map<number, string>();
+}
 
 // Helper: save photo block + 정지기 response + progress
 async function savePhotoBlock(
@@ -696,7 +867,19 @@ async function savePhotoBlock(
     const toCity = `UTC${nextTz >= 0 ? '+' : ''}${nextTz}`;
     await ctx.reply(t(lang, 'jungzigi_pass', { comment: jungzigiComment, count, fromCity, toCity }));
   }
-  await rollNextChain(user);
+
+  // Clean up: keep photos, remove buttons, delete auxiliary messages
+  await cleanupAfterWrite(userId);
+
+  // Show next pending assignment (exclude writing/written/skipped)
+  const remaining = db.prepare(
+    "SELECT a.*, c.mode FROM assignments a JOIN chains c ON c.id = a.chain_id WHERE a.user_id = ? AND a.status = 'pending' ORDER BY a.assigned_at ASC"
+  ).all(userId) as any[];
+
+  if (remaining.length > 0) {
+    const msgIds = await sendArrivalForAssignment(user, remaining[0], remaining.length, lang);
+    storeArrivalMessages(userId, msgIds);
+  }
 }
 
 // Caption after photo is now handled in the main text handler above (photo writing check)
@@ -709,115 +892,17 @@ bot.on('message:voice', async (ctx) => {
   const userId = ctx.from!.id;
   const lang = getLang(ctx);
 
-  // New chain: create on first voice
+  // Voice-only not allowed, require photo
   if (pendingNewChain.has(userId)) {
-    const user = getUser(userId);
-    if (!user) return;
-    const duration = ctx.message.voice.duration;
-    if (duration > config.maxVoiceDuration) {
-      return ctx.reply(t(lang, 'voice_too_long', { max: config.maxVoiceDuration }));
-    }
-
-    const fileId = ctx.message.voice.file_id;
-
-    // STT + validate
-    await ctx.reply(t(lang, 'validating_voice'));
-    const buf = await getFileBuffer(bot, fileId);
-    const transcript = await transcribeVoice(buf);
-    if (transcript) {
-      const validation = await validateText(transcript);
-      if (!validation.safe) {
-        return ctx.reply(t(lang, 'content_blocked', { reason: validation.reason || '' }));
-      }
-    }
-
-    const result = createChainFromContent(userId);
-    if (!result) return ctx.reply(t(lang, 'daily_limit_reached', { max: config.maxDailyStarts }));
-    if (result.sameHour) return ctx.reply(t(lang, 'same_hour_limit'));
-
-    addBlock(result.chainId, 1, userId, user.tz_offset, transcript || '', fileId, 'voice');
-    updateAssignment(result.assignId, 'written');
-    recordBlockOnchain(result.chainId, transcript || '', user.tz_offset, userId).catch(() => {});
-
-    const count = getBlockCount(result.chainId);
-    let nextTz = user.tz_offset - 1;
-    if (nextTz < -11) nextTz += 24;
-    const toCity = `UTC${nextTz >= 0 ? '+' : ''}${nextTz}`;
-    await ctx.reply(t(lang, 'jungzigi_pass', { comment: '정이 출발합니다! 🌏', count, fromCity: user.city || getCity(user.tz_offset), toCity }));
-    await rollNextChain(user);
-    return;
+    return ctx.reply(t(lang, 'photo_required'));
   }
 
   const assignment = getPendingAssignment(userId);
-
   if (!assignment) {
-    return ctx.reply(t(lang, 'voice_no_assignment'));
+    return ctx.reply(t(lang, 'photo_required'));
   }
 
-  const user = getUser(userId);
-  if (!user) return;
-
-  // Voice duration limit
-  const duration = ctx.message.voice.duration;
-  if (duration > config.maxVoiceDuration) {
-    return ctx.reply(t(lang, 'voice_too_long', { max: config.maxVoiceDuration, len: duration }));
-  }
-
-  const voiceFileId = ctx.message.voice.file_id;
-
-  // Step 1: Transcribing indicator
-  await ctx.reply(t(lang, 'voice_transcribing'));
-
-  // Step 2: Download voice file + Whisper STT
-  let transcript: string;
-  try {
-    const buffer = await getFileBuffer(bot, voiceFileId);
-    transcript = await transcribeVoice(buffer);
-  } catch (err: any) {
-    console.error('Voice transcription error:', err.message);
-    return ctx.reply(t(lang, 'voice_transcribe_fail'));
-  }
-
-  if (!transcript) {
-    return ctx.reply(t(lang, 'voice_transcribe_fail'));
-  }
-
-  // Step 3: Validate content
-  const validation = await validateText(transcript);
-  if (!validation.safe) {
-    return ctx.reply(t(lang, 'content_blocked', { reason: validation.reason || '' }));
-  }
-
-  // Step 4: Translate via existing pattern (Gemini)
-  const nextTz = user.tz_offset - 1 < -11 ? user.tz_offset - 1 + 24 : user.tz_offset - 1;
-  const targetLang = TZ_LANGUAGES[nextTz] ?? 'English';
-  let translated: string;
-  try {
-    translated = await translateContent([transcript], targetLang);
-  } catch {
-    translated = transcript;
-  }
-
-  // Step 5: Save block (voice): media_url = file_id, content = transcript, media_type = 'voice'
-  addBlock(assignment.chain_id, assignment.slot_index, userId, user.tz_offset, transcript, voiceFileId, 'voice');
-  updateAssignment(assignment.id, 'written');
-
-  // On-chain record (async, non-blocking)
-  recordBlockOnchain(assignment.chain_id, transcript, user.tz_offset, userId).catch(() => {});
-
-  const count = getBlockCount(assignment.chain_id);
-
-  if (count >= 24) {
-    completeChain(assignment.chain_id);
-    await ctx.reply(t(lang, 'block_saved', { count }));
-  } else {
-    const chain = getChain(assignment.chain_id);
-    const nextHour = chain?.chain_hour ?? user.notify_hour;
-    await ctx.reply(
-      t(lang, 'voice_saved', { count, nextHour }) + `\n\n🎙️ "${transcript}"\n🌐 ${translated}`
-    );
-  }
-  await rollNextChain(user);
+  return ctx.reply(t(lang, 'photo_required'));
 });
 
 // ═══════════════════════════════════════
@@ -879,199 +964,122 @@ function scheduleExpiry(assignmentId: number, chatId: number, delayMs: number) {
   }, delayMs);
 }
 
-function scheduleCountdown(assignmentId: number, chatId: number, messageId: number, originalText: string, kb: any) {
-  const intervalMs = 5 * 60 * 1000; // 5분마다
-  const startTime = Date.now();
-  const totalMs = 60 * 60 * 1000; // 1시간
+// ─── Arrival UX: send messages 2,3,4 for a single assignment ───
+async function sendArrivalForAssignment(user: any, assignment: any, remaining: number, lang: string): Promise<{ msg2Id: number | null; msg3Id: number | null; msg4Id: number | null }> {
+  const chain = getChain(assignment.chain_id);
+  if (!chain) return { msg2Id: null, msg3Id: null, msg4Id: null };
 
-  const timer = setInterval(async () => {
-    const a = db.prepare('SELECT * FROM assignments WHERE id = ?').get(assignmentId) as any;
-    if (!a || !['pending', 'writing'].includes(a.status)) {
-      clearInterval(timer);
-      return;
-    }
-
-    const elapsed = Date.now() - startTime;
-    const remaining = Math.max(0, totalMs - elapsed);
-    const mins = Math.ceil(remaining / 60000);
-
-    if (mins <= 0) {
-      clearInterval(timer);
-      return;
-    }
-
-    const warning = mins <= 10 ? ' ⚠️' : '';
-    const updatedText = originalText.replace(/⏰.*/, `⏰ 남은 시간: ${mins}분${warning}`);
-
-    try {
-      await bot.api.editMessageText(chatId, messageId, updatedText, { reply_markup: kb });
-    } catch { /* message might be deleted or unchanged */ }
-  }, intervalMs);
-}
-
-// Build arrival message for a specific chain
-function buildArrivalMessage(chain: any, user: any, index: number, total: number) {
-  const lastBlock = getLastBlock(chain.id);
-  const nextSlot = (lastBlock?.slot_index ?? 0) + 1;
-  const lang = user.lang ?? 'en';
-  const prevContent = lastBlock?.content ?? '';
+  const lastBlock = getLastBlock(assignment.chain_id);
   const prevUserId = lastBlock ? lastBlock.user_id : chain.creator_id;
   const prevUser = getUser(prevUserId);
   const prevName = prevUser?.first_name ?? prevUser?.username ?? 'someone';
   const prevTzOffset = lastBlock ? lastBlock.tz_offset : chain.creator_tz;
   const prevFlag = getFlag(prevTzOffset);
-  const prevCity = prevUser?.city
-    ? `${prevFlag} ${prevUser.city}`
-    : `${prevFlag} ${getCity(prevTzOffset)}`;
-  const count = getBlockCount(chain.id);
+  const rawCity = prevUser?.city ?? getCity(prevTzOffset);
+  const rawCaption = lastBlock?.content ?? '';
+  const targetLang = LANG_NAMES[lang] ?? (lang === 'ko' ? '한국어' : 'English');
+  const slot = getBlockCount(assignment.chain_id);
+  const chatId = user.telegram_id;
 
-  const now = new Date();
-  const localNow = new Date(now.getTime() + user.tz_offset * 60 * 60 * 1000);
-  const currentHour = localNow.getUTCHours();
-  const nextHour = (currentHour + 1) % 24;
-  const ampm = nextHour < 12 ? '오전' : '오후';
-  const h12 = nextHour === 0 ? 12 : nextHour > 12 ? nextHour - 12 : nextHour;
-  const deadlineStr = `${ampm} ${h12}시`;
-  const text = t(lang, 'arrived', { count, city: prevCity, name: prevName, content: prevContent, deadline: deadlineStr });
+  // Use cached city_i18n if available, fallback to AI translation
+  let cityI18nCache: Record<string, string> | null = null;
+  if (prevUser?.city_i18n) {
+    try { cityI18nCache = JSON.parse(prevUser.city_i18n); } catch {}
+  }
+  const cachedCity = cityI18nCache?.[lang];
 
-  const kb = new InlineKeyboard()
-    .text(t(lang, 'write'), `write:${chain.id}:${nextSlot}`)
-    .row();
-  if (total > 1) {
-    kb.text('◀️', `nav:prev:${user.telegram_id}:${index}`)
-      .text(`${index + 1}/${total}`, 'nav:info')
-      .text('▶️', `nav:next:${user.telegram_id}:${index}`);
+  const [translatedCity, translatedCaption] = await Promise.all([
+    cachedCity ? Promise.resolve(cachedCity) : translateContent([rawCity], targetLang).catch(() => rawCity),
+    rawCaption ? translateContent([rawCaption], targetLang).catch(() => '') : Promise.resolve(''),
+  ]);
+
+  // Backfill city_i18n if cache miss (existing user without pre-translation)
+  if (!cachedCity && translatedCity && prevUser) {
+    const updated = cityI18nCache ?? {};
+    updated[lang] = translatedCity;
+    updateCityI18n(prevUser.telegram_id, updated);
   }
 
-  return { text, kb, lastBlock, prevTzOffset, prevCity, prevContent, nextSlot };
+  const prevCity = `${prevFlag} ${translatedCity || rawCity}`;
+  const caption = rawCaption && translatedCaption && translatedCaption !== rawCaption
+    ? `${rawCaption}\n\n${translatedCaption}`
+    : rawCaption;
+
+  // Message 2: sender info
+  const msg2Id = await sendText(bot, chatId, t(lang, 'arrival_sender', { city: prevCity, name: prevName, slot }));
+
+  const kb = new InlineKeyboard()
+    .text('✍️ 정 이어가기', `write:${assignment.id}`)
+    .text(`⏭ 스킵 (${remaining - 1})`, `skip:${assignment.id}`);
+
+  let msg3Id: number | null = null;
+  if (lastBlock?.media_type === 'photo' && lastBlock?.media_url) {
+    try {
+      const sent = await bot.api.sendPhoto(chatId, lastBlock.media_url, {
+        caption: caption || undefined,
+        reply_markup: kb,
+      });
+      msg3Id = sent.message_id;
+    } catch (e) {
+      // Fallback to text if photo send fails
+      msg3Id = await sendText(bot, chatId, caption || '(no caption)', { reply_markup: kb });
+    }
+  } else {
+    msg3Id = await sendText(bot, chatId, caption || '(no content)', { reply_markup: kb });
+  }
+
+  // Message 4: skip warning
+  const msg4Id = await sendText(bot, chatId, t(lang, 'arrival_skip_warning'));
+
+  scheduleExpiry(assignment.id, chatId, 60 * 60 * 1000);
+
+  return { msg2Id, msg3Id, msg4Id };
 }
 
 async function rollNextChain(user: any) {
   const allChains = findAllChainsForUser(user.telegram_id, user.tz_offset);
   if (allChains.length === 0) return;
 
-  const chain = allChains[0];
-  const lastBlock = getLastBlock(chain.id);
-  const nextSlot = (lastBlock?.slot_index ?? 0) + 1;
-  if (nextSlot > 24) return;
-
+  const lang = user.lang ?? 'en';
+  const chatId = user.telegram_id;
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
-  const assignId = createAssignment(user.telegram_id, chain.id, nextSlot, expiresAt);
 
-  const { text, kb, prevTzOffset, prevCity, prevContent } = buildArrivalMessage(chain, user, 0, allChains.length);
+  // Create assignments for all available chains
+  const assignments: any[] = [];
+  for (const chain of allChains) {
+    const lastBlock = getLastBlock(chain.id);
+    const nextSlot = (lastBlock?.slot_index ?? 0) + 1;
+    if (nextSlot > 24) continue;
+
+    const expiresAt = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+    const assignId = createAssignment(user.telegram_id, chain.id, nextSlot, expiresAt);
+    assignments.push({ id: assignId, chain_id: chain.id, slot_index: nextSlot });
+  }
+
+  if (assignments.length === 0) return;
 
   try {
-    const chatId = user.telegram_id;
+    // Message 1: header with time + count + deadline
+    const localNow = new Date(now.getTime() + user.tz_offset * 60 * 60 * 1000);
+    const currentHour = localNow.getUTCHours();
+    const { ampm, hour12 } = formatHour12(currentHour);
+    const deadlineHour = (currentHour + 1) % 24;
+    const dl = formatHour12(deadlineHour);
+    const deadlineStr = `${dl.ampm} ${dl.hour12}시`;
 
-    // If previous block has photo, send with timestamp caption
-    if (lastBlock?.media_type === 'photo' && lastBlock?.media_url) {
-      const blockCreated = new Date(lastBlock.created_at + 'Z');
-      const localBlock = new Date(blockCreated.getTime() + (lastBlock.tz_offset) * 60 * 60 * 1000);
-      const dateStr = `${localBlock.getUTCFullYear()}.${String(localBlock.getUTCMonth()+1).padStart(2,'0')}.${String(localBlock.getUTCDate()).padStart(2,'0')}`;
-      const timeStr = `${String(localBlock.getUTCHours()).padStart(2,'0')}:${String(localBlock.getUTCMinutes()).padStart(2,'0')}`;
-      const tzStr = `UTC${lastBlock.tz_offset >= 0 ? '+' : ''}${lastBlock.tz_offset}`;
-      const photoCaption = `🕐 ${dateStr} ${timeStr} (${tzStr})`;
-      await sendPhoto(bot, chatId, lastBlock.media_url, photoCaption);
-    }
+    await sendText(bot, chatId, t(lang, 'arrival_header', {
+      ampm, hour12, count: assignments.length, deadline: deadlineStr,
+    }));
 
-    // If previous block is voice, send original voice + translated transcript
-    if (lastBlock?.media_type === 'voice' && lastBlock?.media_url) {
-      const content = prevContent.length > 150 ? prevContent.slice(0, 150) + '...' : prevContent;
-      let voiceCaption = `🎙️ ${prevCity}: "${content}"`;
-      try {
-        const targetLang = TZ_LANGUAGES[user.tz_offset] ?? 'English';
-        const translated = await translateContent([prevContent], targetLang);
-        voiceCaption += `\n🌐 ${translated}`;
-      } catch { /* translation failed, send without */ }
-      await sendVoice(bot, chatId, lastBlock.media_url, voiceCaption);
-    }
-
-    const msgId = await sendText(bot, chatId, text, { reply_markup: kb });
-    if (msgId) {
-      updateAssignment(assignId, 'pending', msgId, chatId);
-      scheduleCountdown(assignId, chatId, msgId, text, kb);
-    }
-    scheduleExpiry(assignId, chatId, 60 * 60 * 1000);
+    // Send messages 2,3,4 for the first assignment only
+    const msgIds = await sendArrivalForAssignment(user, assignments[0], assignments.length, lang);
+    storeArrivalMessages(user.telegram_id, msgIds);
   } catch (e) {
-    console.error(`Failed to send to ${user.telegram_id}:`, e);
+    console.error(`Failed to send arrival to ${user.telegram_id}:`, e);
   }
 }
 
-// Navigation callback handler for browsing chains
-// Demo nav handler (text-only) — temporary test
-const demoSamples = [
-  { city: '🇰🇷 성남시', name: 'jay', count: '5/24' },
-  { city: '🇹🇭 방콕', name: 'mali', count: '12/24' },
-  { city: '🇦🇪 두바이', name: 'omar', count: '18/24' },
-  { city: '🇧🇷 상파울루', name: 'ana', count: '23/24' },
-];
-
-bot.callbackQuery(/^nav:demo:(prev|next):(\d+)$/, async (ctx) => {
-  const direction = ctx.match![1];
-  const currentIdx = Number(ctx.match![2]);
-  let newIdx = direction === 'next' ? currentIdx + 1 : currentIdx - 1;
-  if (newIdx >= demoSamples.length) newIdx = 0;
-  if (newIdx < 0) newIdx = demoSamples.length - 1;
-
-  const s = demoSamples[newIdx];
-  const deadline = '01:00';
-  const text = `🌏 ${s.city}에서 ${s.name}님이 보낸 정이 도착했습니다! (${s.count})\n\n⏰ 남은 시간: 60분\n${deadline}까지 정을 이어붙이지 않으면 이 메시지는 자동 삭제됩니다.`;
-
-  const kb = new InlineKeyboard()
-    .text('✍️ 이어쓰기', `write:demo:${newIdx}`)
-    .row()
-    .text('◀️', `nav:demo:prev:${newIdx}`)
-    .text(`${newIdx + 1}/${demoSamples.length}`, 'nav:info')
-    .text('▶️', `nav:demo:next:${newIdx}`);
-
-  try {
-    await ctx.editMessageText(text, { reply_markup: kb });
-  } catch {}
-
-  await ctx.answerCallbackQuery();
-});
-
-bot.callbackQuery(/^nav:(prev|next):(\d+):(\d+)$/, async (ctx) => {
-  const direction = ctx.match![1];
-  const userId = Number(ctx.match![2]);
-  const currentIdx = Number(ctx.match![3]);
-  const user = getUser(userId);
-  if (!user) return ctx.answerCallbackQuery();
-
-  // Find chains with pending/writing assignments for this user
-  const allChains = db.prepare(`
-    SELECT c.* FROM chains c
-    JOIN assignments a ON a.chain_id = c.id
-    WHERE a.user_id = ? AND a.status IN ('pending', 'writing')
-    ORDER BY c.created_at ASC
-  `).all(userId) as any[];
-  if (allChains.length === 0) return ctx.answerCallbackQuery();
-
-  let newIdx = direction === 'next' ? currentIdx + 1 : currentIdx - 1;
-  if (newIdx >= allChains.length) newIdx = 0;
-  if (newIdx < 0) newIdx = allChains.length - 1;
-
-  const chain = allChains[newIdx];
-  const { text, kb, lastBlock: lb } = buildArrivalMessage(chain, user, newIdx, allChains.length);
-
-  try {
-    // Update text message
-    await ctx.editMessageText(text, { reply_markup: kb });
-
-    // If chain has photo, send new photo (can't edit photo in existing message)
-    if (lb?.media_type === 'photo' && lb?.media_url) {
-      const blockCreated = new Date(lb.created_at + 'Z');
-      const localBlock = new Date(blockCreated.getTime() + lb.tz_offset * 60 * 60 * 1000);
-      const dateStr = `${localBlock.getUTCFullYear()}.${String(localBlock.getUTCMonth()+1).padStart(2,'0')}.${String(localBlock.getUTCDate()).padStart(2,'0')}`;
-      const timeStr = `${String(localBlock.getUTCHours()).padStart(2,'0')}:${String(localBlock.getUTCMinutes()).padStart(2,'0')}`;
-      const tzStr = `UTC${lb.tz_offset >= 0 ? '+' : ''}${lb.tz_offset}`;
-      await sendPhoto(bot, user.telegram_id, lb.media_url, `🕐 ${dateStr} ${timeStr} (${tzStr})`);
-    }
-  } catch { /* edit might fail if message unchanged */ }
-
-  await ctx.answerCallbackQuery();
-});
+// (navigation callbacks removed — replaced by skip/write sequential flow)
 
 async function notifyChainComplete(chainId: number) {
   const chain = getChain(chainId);
