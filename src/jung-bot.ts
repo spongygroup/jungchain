@@ -1069,8 +1069,8 @@ async function sendArrivalForAssignment(user: any, assignment: any, remaining: n
   const msg2Id = await sendText(bot, chatId, t(lang, 'arrival_sender', { city: prevCity, name: prevName, slot }));
 
   const kb = new InlineKeyboard()
-    .text('✍️ 정 이어가기', `write:${assignment.id}`)
-    .text(`⏭ 스킵 (${remaining - 1})`, `skip:${assignment.id}`);
+    .text(t(lang, 'write'), `write:${assignment.id}`)
+    .text(`${t(lang, 'skip')} (${remaining - 1})`, `skip:${assignment.id}`);
 
   let msg3Id: number | null = null;
   if (lastBlock?.media_type === 'photo' && lastBlock?.media_url) {
