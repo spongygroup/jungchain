@@ -24,6 +24,7 @@ import db, {
   getChainsToDeliver, markDelivered,
   getUserNotifyHours, setUserNotifyHours, canChangeNotifyHours,
   incrementDailyStarts, getDailyStarts,
+  blockExistsAtSlot, createForkChain, getExpiredActiveChains, getAllForksOfRoot,
 } from './db/database.js';
 
 // ─── Bot Init ───
@@ -859,21 +860,28 @@ async function processPhotoWithDescription(
   }
 }
 
-// Helper: save photo block + 정지기 response + progress
+// Helper: save photo block + 정지기 response + progress (포크 감지 포함)
 async function savePhotoBlock(
   ctx: any, assignment: any, userId: number, user: any,
   photoId: string, caption: string, lang: string, jungzigiComment: string,
 ) {
-  addBlock(assignment.chain_id, assignment.slot_index, userId, user.tz_offset, caption, photoId, 'photo');
-  updateAssignment(assignment.id, 'written');
-  recordBlockOnchain(assignment.chain_id, caption, user.tz_offset, userId).catch(() => {});
+  let targetChainId = assignment.chain_id;
 
-  const count = getBlockCount(assignment.chain_id);
-  const chain = getChain(assignment.chain_id);
+  // 포크 감지: 해당 슬롯에 이미 블록이 있으면 새 체인(포크) 생성
+  if (blockExistsAtSlot(assignment.chain_id, assignment.slot_index)) {
+    targetChainId = createForkChain(assignment.chain_id, assignment.slot_index, userId, user.tz_offset);
+    console.log(`  🔀 Fork! chain #${assignment.chain_id} slot ${assignment.slot_index} → new chain #${targetChainId}`);
+  }
+
+  addBlock(targetChainId, assignment.slot_index, userId, user.tz_offset, caption, photoId, 'photo');
+  updateAssignment(assignment.id, 'written');
+  recordBlockOnchain(targetChainId, caption, user.tz_offset, userId).catch(() => {});
+
+  const count = getBlockCount(targetChainId);
   const fromCity = getCity(user.tz_offset);
 
   if (count >= 24) {
-    completeChain(assignment.chain_id);
+    completeChain(targetChainId);
     await ctx.reply(t(lang, 'jungzigi_complete', { comment: jungzigiComment, count }));
   } else {
     // Calculate next TZ city
@@ -936,6 +944,13 @@ cron.schedule('0 * * * *', async () => {
     if (a.message_id && a.chat_id) {
       await deleteMessage(bot, a.chat_id, a.message_id);
     }
+  }
+
+  // 1.5) 시간 기반 체인 완료: root의 start_utc + 24h 경과한 active 체인 종료
+  const expiredChains = getExpiredActiveChains(now.toISOString());
+  for (const chain of expiredChains) {
+    completeChain(chain.id);
+    console.log(`  ⏰ Time-expired chain #${chain.id} (${getBlockCount(chain.id)} blocks)`);
   }
 
   // 2) 완주된 체인 결과 전달 (chain_hour + 24h 지난 것)

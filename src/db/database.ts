@@ -30,6 +30,13 @@ try {
   db.exec(`ALTER TABLE users ADD COLUMN city_i18n TEXT`);
 } catch { /* column already exists */ }
 
+// v8 migration: fork columns on chains
+try { db.exec('ALTER TABLE chains ADD COLUMN parent_chain_id INTEGER REFERENCES chains(id)'); } catch {}
+try { db.exec('ALTER TABLE chains ADD COLUMN fork_slot INTEGER'); } catch {}
+try { db.exec('ALTER TABLE chains ADD COLUMN root_chain_id INTEGER REFERENCES chains(id)'); } catch {}
+// 기존 체인: root_chain_id = 자기 자신
+db.exec('UPDATE chains SET root_chain_id = id WHERE root_chain_id IS NULL');
+
 export default db;
 
 // ─── Translation Cache ───
@@ -143,7 +150,9 @@ export function createChain(
     INSERT INTO chains (creator_id, creator_tz, start_utc, mode, chain_hour, mission)
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(creatorId, creatorTz, startUtc, mode, chainHour, mission ?? null);
-  return Number(result.lastInsertRowid);
+  const chainId = Number(result.lastInsertRowid);
+  db.prepare('UPDATE chains SET root_chain_id = ? WHERE id = ?').run(chainId, chainId);
+  return chainId;
 }
 
 export function getChain(chainId: string | number) {
@@ -200,6 +209,57 @@ export function getBlockCount(chainId: number): number {
 
 export function getAllBlocks(chainId: number): any[] {
   return db.prepare('SELECT * FROM blocks WHERE chain_id = ? ORDER BY slot_index ASC').all(chainId) as any[];
+}
+
+// ─── Fork ───
+
+export function blockExistsAtSlot(chainId: number, slotIndex: number): boolean {
+  const row = db.prepare('SELECT 1 FROM blocks WHERE chain_id = ? AND slot_index = ? LIMIT 1').get(chainId, slotIndex);
+  return !!row;
+}
+
+export function createForkChain(parentChainId: number, forkSlot: number, userId: number, userTz: number): number {
+  const parent = db.prepare('SELECT * FROM chains WHERE id = ?').get(parentChainId) as any;
+  if (!parent) throw new Error(`Parent chain ${parentChainId} not found`);
+
+  const rootId = parent.root_chain_id ?? parent.id;
+
+  const result = db.prepare(`
+    INSERT INTO chains (creator_id, creator_tz, start_utc, mode, chain_hour, mission,
+                         parent_chain_id, fork_slot, root_chain_id, block_count)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+  `).run(userId, userTz, parent.start_utc, parent.mode, parent.chain_hour,
+         parent.mission ?? null, parentChainId, forkSlot, rootId);
+  const newChainId = Number(result.lastInsertRowid);
+
+  // Copy-on-Fork: 부모의 기존 블록 중 fork 지점 이전 것을 복사
+  const parentBlocks = db.prepare(
+    'SELECT * FROM blocks WHERE chain_id = ? AND slot_index < ? ORDER BY slot_index ASC'
+  ).all(parentChainId, forkSlot) as any[];
+
+  const insertStmt = db.prepare(`
+    INSERT INTO blocks (chain_id, slot_index, user_id, tz_offset, content, media_url, media_type, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const b of parentBlocks) {
+    insertStmt.run(newChainId, b.slot_index, b.user_id, b.tz_offset, b.content, b.media_url, b.media_type, b.created_at);
+  }
+
+  db.prepare('UPDATE chains SET block_count = ? WHERE id = ?').run(parentBlocks.length, newChainId);
+  return newChainId;
+}
+
+export function getExpiredActiveChains(nowUtc: string): any[] {
+  return db.prepare(`
+    SELECT c.* FROM chains c
+    JOIN chains r ON r.id = c.root_chain_id
+    WHERE c.status = 'active'
+      AND datetime(r.start_utc, '+24 hours') <= datetime(?)
+  `).all(nowUtc) as any[];
+}
+
+export function getAllForksOfRoot(rootChainId: number): any[] {
+  return db.prepare('SELECT * FROM chains WHERE root_chain_id = ? ORDER BY id').all(rootChainId) as any[];
 }
 
 // ─── Assignments ───

@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS chains (
   block_count   INTEGER DEFAULT 1,
   completed_at  TEXT,                         -- when chain completed
   deliver_at    TEXT,                         -- when to deliver result to creator
+  parent_chain_id INTEGER REFERENCES chains(id),  -- NULL = root chain
+  fork_slot       INTEGER,                         -- 분기된 슬롯 번호
+  root_chain_id   INTEGER REFERENCES chains(id),   -- fork tree의 root (root=자기자신)
   created_at    TEXT DEFAULT (datetime('now'))
 );
 
