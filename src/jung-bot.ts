@@ -340,6 +340,7 @@ const pendingNewChain = new Set<number>();
 
 bot.callbackQuery('menu:new', async (ctx) => {
   await ctx.answerCallbackQuery();
+  try { await ctx.deleteMessage(); } catch {}
   const lang = getLang(ctx);
   const user = getUser(ctx.from!.id);
   if (!user) return requireSetup(ctx, lang, 'menu:new');
@@ -359,6 +360,7 @@ bot.callbackQuery('menu:new', async (ctx) => {
 
 bot.callbackQuery('menu:arrived', async (ctx) => {
   await ctx.answerCallbackQuery();
+  try { await ctx.deleteMessage(); } catch {}
   const lang = getLang(ctx);
   const user = getUser(ctx.from!.id);
   if (!user) return requireSetup(ctx, lang, 'menu:arrived');
@@ -392,6 +394,7 @@ bot.callbackQuery('menu:arrived', async (ctx) => {
 
 bot.callbackQuery('menu:notify', async (ctx) => {
   await ctx.answerCallbackQuery();
+  try { await ctx.deleteMessage(); } catch {}
   const lang = getLang(ctx);
   const user = getUser(ctx.from!.id);
   if (!user) return requireSetup(ctx, lang, 'menu:notify');
@@ -409,6 +412,7 @@ bot.callbackQuery('menu:notify', async (ctx) => {
 
 bot.callbackQuery('menu:mychains', async (ctx) => {
   await ctx.answerCallbackQuery();
+  try { await ctx.deleteMessage(); } catch {}
   const lang = getLang(ctx);
   const user = getUser(ctx.from!.id);
   if (!user) return requireSetup(ctx, lang, 'menu:mychains');
@@ -430,7 +434,8 @@ bot.callbackQuery('menu:mychains', async (ctx) => {
   if (activeChains.length > 0) {
     text += t(lang, 'my_chains_active_section');
     for (const chain of activeChains) {
-      const count = getBlockCount(chain.id);
+      const lastBlock = getLastBlock(chain.id);
+      const count = lastBlock?.slot_index ?? 0;
       const createdAt = new Date(chain.created_at + 'Z');
       const localCreated = new Date(createdAt.getTime() + user.tz_offset * 60 * 60 * 1000);
       const m = localCreated.getUTCMonth() + 1;
@@ -628,12 +633,18 @@ bot.command('status', async (ctx) => {
   const lang = getLang(ctx);
   const user = getUser(ctx.from!.id);
   if (!user) return requireSetup(ctx, lang, 'menu:status');
-  const city = getCity(user.tz_offset);
+  const city = user.city || getCity(user.tz_offset);
   const sign = user.tz_offset >= 0 ? '+' : '';
-  const activeChains = getActiveChains().length;
+  const notifyHours = getUserNotifyHours(user.telegram_id);
+  const hourStr = notifyHours.length > 0
+    ? notifyHours.map(h => `${String(h).padStart(2, '0')}:00`).join(', ')
+    : '-';
+  const myActiveChains = db.prepare(
+    "SELECT COUNT(*) as cnt FROM chains WHERE creator_id = ? AND status = 'active'"
+  ).get(user.telegram_id) as any;
   await ctx.reply(t(lang, 'status_msg', {
     name: user.first_name ?? ctx.from?.first_name,
-    city, sign, offset: user.tz_offset, hour: user.notify_hour, active: activeChains,
+    city, sign, offset: user.tz_offset, hour: hourStr, active: myActiveChains.cnt,
   }));
 });
 
@@ -825,11 +836,11 @@ async function processPhotoWithDescription(
     updateAssignment(result.assignId, 'written');
     recordBlockOnchain(result.chainId, caption, user.tz_offset, userId).catch(() => {});
 
-    const count = getBlockCount(result.chainId);
+    const slot = 1; // new chain always starts at slot 1
     let nextTz = user.tz_offset - 1;
     if (nextTz < -11) nextTz += 24;
     const toCity = `UTC${nextTz >= 0 ? '+' : ''}${nextTz}`;
-    await ctx.reply(t(lang, 'jungzigi_pass', { comment: '정이 출발합니다! 🌏', count, fromCity: user.city || getCity(user.tz_offset), toCity }));
+    await ctx.reply(t(lang, 'jungzigi_pass', { comment: '정이 출발합니다! 🌏', count: slot, fromCity: user.city || getCity(user.tz_offset), toCity }));
   } else {
     // Relay flow
     const assignment = pending.assignmentId
@@ -877,18 +888,18 @@ async function savePhotoBlock(
   updateAssignment(assignment.id, 'written');
   recordBlockOnchain(targetChainId, caption, user.tz_offset, userId).catch(() => {});
 
-  const count = getBlockCount(targetChainId);
+  const slot = assignment.slot_index;
   const fromCity = getCity(user.tz_offset);
 
-  if (count >= 24) {
+  if (slot >= 24) {
     completeChain(targetChainId);
-    await ctx.reply(t(lang, 'jungzigi_complete', { comment: jungzigiComment, count }));
+    await ctx.reply(t(lang, 'jungzigi_complete', { comment: jungzigiComment, count: slot }));
   } else {
     // Calculate next TZ city
     let nextTz = user.tz_offset - 1;
     if (nextTz < -11) nextTz += 24;
     const toCity = `UTC${nextTz >= 0 ? '+' : ''}${nextTz}`;
-    await ctx.reply(t(lang, 'jungzigi_pass', { comment: jungzigiComment, count, fromCity, toCity }));
+    await ctx.reply(t(lang, 'jungzigi_pass', { comment: jungzigiComment, count: slot, fromCity, toCity }));
   }
 
   // Clean up: keep photos, remove buttons, delete auxiliary messages

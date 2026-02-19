@@ -26,7 +26,7 @@ const BASE: Record<string, Record<string, string>> = {
     new_story: '🌏 릴레이 소설이 시작됩니다! (1/24)\n\n📍 {city}\n첫 장면을 써주세요. 마지막에 선택지 2개(A/B)도 남겨주세요.\n({max}자 이내)',
     new_photo: '🌏 포토 릴레이가 시작됩니다! (1/24)\n\n📍 {city}\n📸 미션: {mission}\n\n사진을 찍어 보내주세요!',
     settings_msg: '{name}님, 설정을 변경합니다.\n📍 위치를 공유해주세요.',
-    status_msg: '📊 내 정보\n\n👤 {name}\n📍 {city} (UTC{sign}{offset})\n⏰ 알림: 매일 {hour}:00\n🌏 진행 중인 정: {active}개',
+    status_msg: '📊 내 정보\n\n👤 {name}\n📍 {city} (UTC{sign}{offset})\n⏰ 알림: {hour}\n🌏 내가 만든 정: {active}개',
     write: '✍️ 정 이어가기',
     skip: '⏭ 스킵',
     write_prompt: '✍️ {slot}/24\n\n📷 사진 1장을 보내주세요!\n캡션(200자 이내)도 함께 쓸 수 있어요.',
