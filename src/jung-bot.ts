@@ -282,6 +282,7 @@ bot.callbackQuery(/^confirm_loc:/, async (ctx) => {
 // ═══════════════════════════════════════
 
 bot.command('devstart', async (ctx) => {
+  try { await ctx.deleteMessage(); } catch {}
   const lang = getLang(ctx);
   const kb = new InlineKeyboard();
   // Show popular TZ options in rows of 4
@@ -570,6 +571,7 @@ bot.callbackQuery('nhr:done', async (ctx) => {
 // ═══════════════════════════════════════
 
 bot.command('new', async (ctx) => {
+  try { await ctx.deleteMessage(); } catch {}
   const lang = getLang(ctx);
   const user = getUser(ctx.from!.id);
   if (!user) return requireSetup(ctx, lang, 'menu:new');
@@ -623,6 +625,7 @@ function createChainFromContent(userId: number): { chainId: number; assignId: nu
 // ═══════════════════════════════════════
 
 bot.command('settings', async (ctx) => {
+  try { await ctx.deleteMessage(); } catch {}
   const lang = getLang(ctx);
   const name = ctx.from?.first_name ?? 'Friend';
   const kb = new Keyboard()
@@ -632,6 +635,7 @@ bot.command('settings', async (ctx) => {
 });
 
 bot.command('status', async (ctx) => {
+  try { await ctx.deleteMessage(); } catch {}
   const lang = getLang(ctx);
   const user = getUser(ctx.from!.id);
   if (!user) return requireSetup(ctx, lang, 'menu:status');
@@ -710,6 +714,7 @@ bot.callbackQuery(/^skip:/, async (ctx) => {
 
 // /skip command — skip photo description
 bot.command('skip', async (ctx) => {
+  try { await ctx.deleteMessage(); } catch {}
   const userId = ctx.from!.id;
   const pending = pendingPhoto.get(userId);
   if (!pending) return;
