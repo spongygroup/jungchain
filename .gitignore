@@ -25,5 +25,6 @@ cache/
 
 jung.db
 memory/
+*.mp4
 
 .DS_Store
