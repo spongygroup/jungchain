@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "dev": "tsx watch src/jung-bot.ts",
+    "start": "node dist/jung-bot.js",
     "build": "tsc",
     "sim": "SIM_MODE=true SIM_SPEED=60 tsx src/sim/sim-runner.ts",
     "chain:live": "npx tsx src/sim/live-relay.ts",

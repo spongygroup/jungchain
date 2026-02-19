@@ -213,11 +213,15 @@ export function createAssignment(userId: number, chainId: number, slotIndex: num
 }
 
 export function getPendingAssignment(userId: number) {
+  // Prefer 'writing' (user clicked write) over 'pending'
   return db.prepare(`
     SELECT a.*, c.mode, c.mission FROM assignments a
     JOIN chains c ON a.chain_id = c.id
     WHERE a.user_id = ? AND a.status IN ('pending', 'writing')
-    ORDER BY a.assigned_at DESC LIMIT 1
+    ORDER BY
+      CASE a.status WHEN 'writing' THEN 0 ELSE 1 END,
+      a.assigned_at ASC
+    LIMIT 1
   `).get(userId) as any;
 }
 
