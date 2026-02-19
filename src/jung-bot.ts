@@ -419,7 +419,7 @@ bot.callbackQuery('menu:mychains', async (ctx) => {
   ).all(user.telegram_id) as any[];
 
   if (myChains.length === 0) {
-    return ctx.reply(t(lang, 'my_chains_empty'));
+    return ctx.reply(t(lang, 'my_chains_empty', { name: user.first_name ?? ctx.from?.first_name }));
   }
 
   const activeChains = myChains.filter(c => c.status === 'active');
