@@ -224,12 +224,23 @@ JSON으로만 답해: {"safe": true} 또는 {"safe": false, "reason": "사유"}
 
 // ─── Voice transcription via OpenAI Whisper ───
 export async function transcribeVoice(audioBuffer: Buffer): Promise<string> {
-  const openai = new OpenAI({ apiKey: config.openaiApiKey });
+  const model = getModel('gemini-2.0-flash');
+  const base64Audio = audioBuffer.toString('base64');
 
-  const file = await toFile(audioBuffer, 'voice.ogg', { type: 'audio/ogg' });
-  const transcription = await openai.audio.transcriptions.create({
-    model: 'whisper-1',
-    file,
-  });
-  return transcription.text.trim();
+  try {
+    const result = await model.generateContent({
+      systemInstruction: 'You are a speech-to-text transcriber. Transcribe the audio exactly as spoken. Output ONLY the transcription text, nothing else. If the audio is unclear or empty, output an empty string.',
+      contents: [{
+        role: 'user',
+        parts: [
+          { text: 'Transcribe this audio:' },
+          { inlineData: { mimeType: 'audio/ogg', data: base64Audio } },
+        ],
+      }],
+    });
+    return result.response.text().trim();
+  } catch (err: any) {
+    console.error(`Gemini STT error: ${err.message}`);
+    return '';
+  }
 }

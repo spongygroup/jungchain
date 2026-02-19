@@ -606,7 +606,7 @@ bot.on('message:photo', async (ctx) => {
     const caption = ctx.message.caption?.trim() || '';
 
     // Validate photo
-    await ctx.reply(t(lang, 'validating'));
+    await ctx.reply(t(lang, 'validating_photo'));
     const base64 = await getPhotoBase64(bot, photoId);
     const validation = await aiValidatePhoto(base64, '');
     if (validation.status === 'safety_fail') {
@@ -648,7 +648,7 @@ bot.on('message:photo', async (ctx) => {
   if (!photoId) return;
 
   // Step 1: 정지기 검증 중 메시지
-  await ctx.reply(t(lang, 'validating'));
+  await ctx.reply(t(lang, 'validating_photo'));
 
   // Step 2: Validate photo (mission + safety + 정지기 comment)
   let jungzigiComment = '좋은 사진이네요! 📸';
@@ -721,7 +721,7 @@ bot.on('message:voice', async (ctx) => {
     const fileId = ctx.message.voice.file_id;
 
     // STT + validate
-    await ctx.reply(t(lang, 'validating'));
+    await ctx.reply(t(lang, 'validating_voice'));
     const buf = await getFileBuffer(bot, fileId);
     const transcript = await transcribeVoice(buf);
     if (transcript) {
@@ -1039,7 +1039,13 @@ bot.callbackQuery(/^nav:(prev|next):(\d+):(\d+)$/, async (ctx) => {
   const user = getUser(userId);
   if (!user) return ctx.answerCallbackQuery();
 
-  const allChains = findAllChainsForUser(userId, user.tz_offset);
+  // Find chains with pending/writing assignments for this user
+  const allChains = db.prepare(`
+    SELECT c.* FROM chains c
+    JOIN assignments a ON a.chain_id = c.id
+    WHERE a.user_id = ? AND a.status IN ('pending', 'writing')
+    ORDER BY c.created_at ASC
+  `).all(userId) as any[];
   if (allChains.length === 0) return ctx.answerCallbackQuery();
 
   let newIdx = direction === 'next' ? currentIdx + 1 : currentIdx - 1;
