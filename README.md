@@ -107,10 +107,13 @@ npm run dev                      # 개발 모드 (hot reload)
 - **일체인** — 노동·협업
 - **장체인** — 거래·커머스
 
-## 링크
+## 사용 방법
 
-- 라이브 봇: https://t.me/beanie_jungbot
-- GitHub: https://github.com/spongygroup/jungchain
+1. Telegram에서 [@beanie_jungbot](https://t.me/beanie_jungbot) 시작
+2. `/start` — 봇 시작 + 위치 등록 (타임존 자동 감지)
+3. 내 타임존 차례가 오면 알림 수신
+4. 사진 1장 + 캡션(200자) 전송 → 다음 타임존으로 릴레이
+5. 24시간 후 지구를 한 바퀴 돌아 완주 → 온체인 기록 + 소울바운드 NFT 발급
 
 ## 라이선스
 
