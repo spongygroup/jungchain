@@ -4,7 +4,7 @@
  * wallets.json에 백업 — DB 리셋해도 지갑 매핑 유지.
  */
 import { CdpClient } from '@coinbase/cdp-sdk';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -12,7 +12,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const WALLETS_PATH = join(__dirname, '../../data/wallets.json');
 
 // Load CDP credentials
-const cdpCreds = JSON.parse(readFileSync(join(process.env.HOME!, '.config/cdp/credentials.json'), 'utf8'));
+const cdpCredsPath = process.env.CDP_CREDENTIALS_PATH ?? join(process.env.HOME!, '.config/cdp/credentials.json');
+const cdpPerms = statSync(cdpCredsPath).mode & 0o777;
+if (cdpPerms & 0o077) {
+  console.warn(`⚠️ CDP credentials file has loose permissions (${cdpPerms.toString(8)}). Run: chmod 600 ${cdpCredsPath}`);
+}
+const cdpCreds = JSON.parse(readFileSync(cdpCredsPath, 'utf8'));
 
 let cdpClient: CdpClient | null = null;
 
