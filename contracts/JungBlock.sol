@@ -32,10 +32,12 @@ contract JungBlock {
     mapping(bytes32 => bool) public chainCompleted;
 
     address public operator;
+    address public pendingOperator;
     uint256 public totalBlocks;
 
     event ChainCreated(bytes32 indexed chainId, address indexed creator, int8 startTz);
     event ChainCompleted(bytes32 indexed chainId, uint256 blockCount);
+    event OperatorTransferred(address indexed oldOperator, address indexed newOperator);
     event BlockAdded(
         bytes32 indexed chainId,
         bytes32 blockHash,
@@ -51,6 +53,18 @@ contract JungBlock {
 
     constructor() {
         operator = msg.sender;
+    }
+
+    function transferOperator(address newOperator) external onlyOperator {
+        require(newOperator != address(0), "invalid address");
+        pendingOperator = newOperator;
+    }
+
+    function acceptOperator() external {
+        require(msg.sender == pendingOperator, "not pending operator");
+        emit OperatorTransferred(operator, msg.sender);
+        operator = msg.sender;
+        pendingOperator = address(0);
     }
 
     function createChain(

@@ -112,8 +112,8 @@ contracts/
 ## 온체인
 
 - **네트워크**: Base Sepolia (chainId: 84532)
-- **JungBlock**: [`0x4E2ff5f12EDa184992c66A2b9c015Bf4aB60D208`](https://sepolia.basescan.org/address/0x4E2ff5f12EDa184992c66A2b9c015Bf4aB60D208)
-- **JungSoulbound**: [`0xdCE1C45c52FE8227c2373A0D6a4C68cd397D4cb2`](https://sepolia.basescan.org/address/0xdCE1C45c52FE8227c2373A0D6a4C68cd397D4cb2)
+- **JungBlock**: [`0x880061Ed3157846D926E886216866De7301c084d`](https://sepolia.basescan.org/address/0x880061Ed3157846D926E886216866De7301c084d)
+- **JungSoulbound**: [`0x754AcFac7f3169D93dd5B0209ce3b86995A62553`](https://sepolia.basescan.org/address/0x754AcFac7f3169D93dd5B0209ce3b86995A62553)
 
 ## 정나무
 

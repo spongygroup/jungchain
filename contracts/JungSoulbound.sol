@@ -28,7 +28,9 @@ contract JungSoulbound is ERC721 {
 
     address public jungBlock;
     address public operator;
+    address public pendingOperator;
 
+    event OperatorTransferred(address indexed oldOperator, address indexed newOperator);
     event JungMinted(
         address indexed to,
         uint256 indexed tokenId,
@@ -45,6 +47,18 @@ contract JungSoulbound is ERC721 {
     constructor(address _jungBlock) ERC721("Jung Soulbound", "JUNG") {
         jungBlock = _jungBlock;
         operator = msg.sender;
+    }
+
+    function transferOperator(address newOperator) external onlyOperator {
+        require(newOperator != address(0), "invalid address");
+        pendingOperator = newOperator;
+    }
+
+    function acceptOperator() external {
+        require(msg.sender == pendingOperator, "not pending operator");
+        emit OperatorTransferred(operator, msg.sender);
+        operator = msg.sender;
+        pendingOperator = address(0);
     }
 
     function mint(

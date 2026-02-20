@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../.env" 2>/dev/null
 
 BOT_TOKEN="${JUNG_BOT_TOKEN:?JUNG_BOT_TOKEN not set}"
-CHAT_ID="${JUNG_ADMIN_CHAT_ID:-5023569703}"
+CHAT_ID="${JUNG_ADMIN_CHAT_ID:?JUNG_ADMIN_CHAT_ID not set}"
 LOG_FILE="/private/tmp/jung-bot.log"
 
 # Check if bot process is running
