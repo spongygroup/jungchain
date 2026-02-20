@@ -1,8 +1,8 @@
 #!/bin/bash
 # 정봇 헬스체크 — 1시간마다 실행, 결과를 텔레그램으로 전송
 
-BOT_TOKEN="8368056621:***REDACTED***"
-CHAT_ID="5023569703"
+BOT_TOKEN="${JUNG_BOT_TOKEN:?JUNG_BOT_TOKEN not set}"
+CHAT_ID="${JUNG_ADMIN_CHAT_ID:-5023569703}"
 LOG_FILE="/private/tmp/jung-bot.log"
 
 # Check if bot process is running
