@@ -4,7 +4,8 @@
  */
 import { execSync } from 'child_process';
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import type { Bot } from 'grammy';
 import { getChain, getAllBlocks, getUser } from '../db/database.js';
 import { getCity, getFlag } from '../config.js';
@@ -12,6 +13,8 @@ import { translateContent } from './ai.js';
 import { getFileBuffer } from './telegram.js';
 import { tAsync } from './i18n.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 const TMP_DIR = '/tmp/jung-album';
 
 // ─── Main export ───
@@ -221,13 +224,44 @@ function buildNftSvg(
   const sign = creatorTz >= 0 ? '+' : '';
   return `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">
 <rect width="400" height="400" fill="#1a1a2e"/>
-<text x="200" y="120" text-anchor="middle" font-size="80" fill="#e94560">${jungChar}</text>
+<text x="200" y="120" text-anchor="middle" font-size="80" fill="#e94560" font-family="Noto Sans KR, sans-serif">${jungChar}</text>
 <text x="200" y="180" text-anchor="middle" font-size="20" fill="#eee" font-family="monospace">JUNG #${chainId}</text>
 <text x="200" y="220" text-anchor="middle" font-size="16" fill="#888" font-family="monospace">UTC${sign}${creatorTz} | slot ${blockCount}/24</text>
 <text x="200" y="260" text-anchor="middle" font-size="14" fill="#888" font-family="monospace">${blockCount} blocks around the world</text>
 <text x="200" y="320" text-anchor="middle" font-size="12" fill="#555" font-family="monospace">Proof of Jung</text>
 <text x="200" y="345" text-anchor="middle" font-size="10" fill="#444" font-family="monospace">soulbound / non-transferable</text>
 </svg>`;
+}
+
+// ─── NFT image (resvg-js) ───
+
+export async function generateNftImage(
+  chainId: number, variant: number,
+): Promise<Buffer> {
+  const chain = getChain(chainId) as any;
+  if (!chain) throw new Error(`Chain ${chainId} not found`);
+
+  const blocks = getAllBlocks(chainId);
+  const jungChar = variant === 1 ? '\uC815' : '\u60C5';
+  const svg = buildNftSvg(chainId, jungChar, chain.creator_tz, blocks.length);
+
+  // Load Noto Sans KR subset font for Korean '정' + Menlo for monospace
+  const fontPath = join(__dirname, '../../data/fonts/NotoSansKR-Jung.ttf');
+  const monoPath = '/System/Library/Fonts/Menlo.ttc';
+  const fontFiles = [monoPath];
+  if (existsSync(fontPath)) fontFiles.unshift(fontPath);
+
+  const { Resvg } = await import('@resvg/resvg-js');
+  const resvg = new Resvg(svg, {
+    fitTo: { mode: 'width' as const, value: 1600 },
+    font: {
+      fontFiles,
+      loadSystemFonts: false,
+      defaultFontFamily: 'Menlo',
+    },
+  });
+  const pngData = resvg.render();
+  return Buffer.from(pngData.asPng());
 }
 
 // ─── Card HTML builder ───

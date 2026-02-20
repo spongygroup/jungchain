@@ -12,7 +12,7 @@ import { locationToOffset, reverseGeocode } from './services/geo.js';
 import { validatePhoto as aiValidatePhoto, validateText, translateContent } from './services/ai.js';
 import { sendText, deleteMessage, getPhotoBase64, getLargestPhotoId } from './services/telegram.js';
 import { makeChainId, recordBlock, mintSoulbound, createOnchainChain, explorerUrl } from './services/onchain.js';
-import { generateAlbumHtml } from './services/album.js';
+import { generateAlbumHtml, generateNftImage } from './services/album.js';
 import { createWallet } from './services/wallet.js';
 import { ethers } from 'ethers';
 import db, {
@@ -528,8 +528,7 @@ bot.callbackQuery(/^nft:/, async (ctx) => {
     return;
   }
 
-  // Remove buttons
-  try { await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }); } catch {}
+  try { await ctx.deleteMessage(); } catch {}
   await ctx.answerCallbackQuery(variant === 1 ? '정 ✓' : '情 ✓');
 
   try {
@@ -1012,31 +1011,23 @@ bot.on('message:voice', async (ctx) => {
 });
 
 // ═══════════════════════════════════════
-// HOURLY CRON
+// MINUTELY CRON (분 단위 체인 만료 + 정시 릴레이 전달)
 // ═══════════════════════════════════════
 
-cron.schedule('0 * * * *', async () => {
+cron.schedule('* * * * *', async () => {
   const now = new Date();
   const utcHour = now.getUTCHours();
-  console.log(`⏰ Hourly cron: UTC ${utcHour}:00`);
+  const utcMinute = now.getUTCMinutes();
+  const isTopOfHour = utcMinute === 0;
+  if (isTopOfHour) console.log(`⏰ Cron: UTC ${utcHour}:00`);
 
-  // 1) Expire old assignments
-  const expired = getExpiredAssignments(now.toISOString());
-  for (const a of expired) {
-    updateAssignment(a.id, 'expired');
-    if (a.message_id && a.chat_id) {
-      await deleteMessage(bot, a.chat_id, a.message_id);
-    }
-  }
-
-  // 1.5) 시간 기반 체인 완료: root의 start_utc + 24h 경과한 active 체인 종료
+  // 매분: 체인 만료 + 전달
   const expiredChains = getExpiredActiveChains(now.toISOString());
   for (const chain of expiredChains) {
     completeChain(chain.id);
     console.log(`  ⏰ Time-expired chain #${chain.id} (${getBlockCount(chain.id)} blocks)`);
   }
 
-  // 2) 완주된 체인 결과 전달 + NFT 스타일 선택 요청
   const toDeliver = getChainsToDeliver(now.toISOString());
   for (const chain of toDeliver) {
     try {
@@ -1055,30 +1046,39 @@ cron.schedule('0 * * * *', async () => {
     }
   }
 
-  // 2.5) 24시간 미선택 체인 자동 민팅 (기본값 情)
-  if (ENABLE_ONCHAIN) {
-    const staleNotified = getStaleNotifiedChains(now.toISOString());
-    for (const chain of staleNotified) {
-      try {
-        await mintCompletionNFT(chain.id, 0);
-        await sendAlbum(chain.id, 0);
-        markDelivered(chain.id);
-        console.log(`  🎖️ Auto-minted NFT for stale chain #${chain.id} (default 情)`);
-      } catch (e) {
-        console.error(`  🎖️ Auto-mint failed for chain #${chain.id}:`, e);
+  // 정시에만: 어사인먼트 만료, NFT 자동 민팅, 릴레이 배정
+  if (isTopOfHour) {
+    const expired = getExpiredAssignments(now.toISOString());
+    for (const a of expired) {
+      updateAssignment(a.id, 'expired');
+      if (a.message_id && a.chat_id) {
+        await deleteMessage(bot, a.chat_id, a.message_id);
       }
     }
-  }
 
-  // 3) notify_hour 기준: 유저가 설정한 시간에 대기 중인 체인 롤링 배정
-  const users = getUsersByNotifyHour(utcHour);
-  console.log(`  → ${users.length} users at notify_hour`);
+    if (ENABLE_ONCHAIN) {
+      const staleNotified = getStaleNotifiedChains(now.toISOString());
+      for (const chain of staleNotified) {
+        try {
+          await mintCompletionNFT(chain.id, 0);
+          await sendAlbum(chain.id, 0);
+          markDelivered(chain.id);
+          console.log(`  🎖️ Auto-minted NFT for stale chain #${chain.id} (default 情)`);
+        } catch (e) {
+          console.error(`  🎖️ Auto-mint failed for chain #${chain.id}:`, e);
+        }
+      }
+    }
 
-  for (const user of users) {
-    try {
-      await rollNextChain(user);
-    } catch (e) {
-      console.error(`  ❌ Failed to notify user ${user.telegram_id}:`, e);
+    const users = getUsersByNotifyHour(utcHour);
+    console.log(`  → ${users.length} users at notify_hour`);
+
+    for (const user of users) {
+      try {
+        await rollNextChain(user);
+      } catch (e) {
+        console.error(`  ❌ Failed to notify user ${user.telegram_id}:`, e);
+      }
     }
   }
 });
@@ -1226,19 +1226,30 @@ async function notifyChainComplete(chainId: number) {
   if (!chain) return;
 
   const blocks = getAllBlocks(chainId);
-  const cities = new Set(blocks.map(b => getCity(b.tz_offset)));
   const creator = getUser(chain.creator_id);
   const lang = creator?.lang ?? 'en';
 
-  let summary = t(lang, 'complete', { count: blocks.length, cities: cities.size });
-
+  // 유저별 실제 도시 조회
+  const userCities = new Map<number, string>();
   for (const b of blocks) {
-    const flag = getFlag(b.tz_offset);
-    const city = getCity(b.tz_offset);
-    const short = b.content.length > 80 ? b.content.slice(0, 80) + '...' : b.content;
-    const ts = formatBlockTimestamp(b.created_at, b.tz_offset);
-    summary += `${b.slot_index}/24 ${flag} ${city} · ${ts}\n"${short}"\n\n`;
+    if (!userCities.has(b.user_id)) {
+      const u = getUser(b.user_id);
+      userCities.set(b.user_id, u?.city || getCity(b.tz_offset));
+    }
   }
+
+  const uniqueCities = new Set(userCities.values());
+  const othersCount = new Set(blocks.map(b => b.user_id).filter((id: number) => id !== chain.creator_id)).size;
+  let summary = othersCount > 0
+    ? t(lang, 'complete', { count: othersCount, cities: uniqueCities.size })
+    : t(lang, 'complete_solo');
+
+  const route = blocks.map(b => {
+    const flag = getFlag(b.tz_offset);
+    const city = userCities.get(b.user_id) || getCity(b.tz_offset);
+    return `${flag} ${city}`;
+  }).join(' → ');
+  summary += route;
 
   try {
     await sendText(bot, chain.creator_id, summary);
@@ -1328,15 +1339,23 @@ async function mintCompletionNFT(chainId: number, variant: number = 0) {
 
     // Mint to creator's wallet, fallback to deployer
     const mintTo = creator?.wallet_address || process.env.DEPLOYER_ADDRESS || ethers.ZeroAddress;
+    const lang = creator?.lang ?? 'en';
 
     const { tokenId, txHash } = await mintSoulbound(
       mintTo, onchainId, chain.creator_tz, blocks.length, 1, variant
     );
 
-    const lang = creator?.lang ?? 'en';
-    await sendText(bot, chain.creator_id,
-      t(lang, 'nft_minted', { tokenId, url: explorerUrl(txHash) })
-    );
+    // Send NFT image (resvg)
+    try {
+      const nftPng = await generateNftImage(chainId, variant);
+      await bot.api.sendPhoto(chain.creator_id, new InputFile(nftPng, `jung-nft-${tokenId}.png`), {
+        caption: t(lang, 'nft_minted', { tokenId }),
+      });
+    } catch (imgErr: any) {
+      // 이미지 실패 시 텍스트만
+      await sendText(bot, chain.creator_id, t(lang, 'nft_minted', { tokenId }));
+      console.warn(`  🎖️ NFT image failed, sent text only: ${imgErr.message}`);
+    }
   } catch (e: any) {
     console.error(`  🎖️ NFT mint error: ${e.message?.slice(0, 80)}`);
   }
