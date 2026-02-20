@@ -2,9 +2,7 @@ import 'dotenv/config';
 
 export const config = {
   jungBotToken: process.env.JUNG_BOT_TOKEN ?? '',
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
   googleApiKey: process.env.GOOGLE_API_KEY ?? '',
-  openaiApiKey: process.env.OPENAI_API_KEY ?? '',
   simMode: process.env.SIM_MODE === 'true',
   simSpeed: Number(process.env.SIM_SPEED ?? '60'),
   simUsersPerTz: Number(process.env.SIM_USERS_PER_TZ ?? '2'),

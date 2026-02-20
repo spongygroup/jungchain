@@ -1,6 +1,6 @@
 {
   "name": "jung",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/jung-bot.ts",
@@ -14,7 +14,6 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
     "@coinbase/cdp-sdk": "^1.44.1",
     "@google/generative-ai": "^0.24.1",
     "@openzeppelin/contracts": "^5.4.0",
