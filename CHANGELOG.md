@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.4.0] — 2026-02-20
+
+### 완주 앨범
+
+- 체인 완주 시 동적 HTML 앨범 생성 (`src/services/album.ts`)
+- 사진 WebP 변환 + base64 임베딩 (자체 완결 HTML)
+- 캡션 자동 번역 (수신자 언어 ≠ 작성자 언어일 때)
+- NFT 히어로 + 카드 레이아웃 + IntersectionObserver 애니메이션
+- 3곳에서 앨범 전송: NFT 콜백, 24h 자동 민팅, 온체인 비활성 경로
+
+### 소울바운드 NFT
+
+- JungSoulbound v7 컨트랙트 (情 hanja / 정 hangul 배리언트)
+- 체인 완주 → 유저에게 NFT 스타일 선택 인라인 버튼 전송
+- 24h 미선택 시 기본값(情)으로 자동 민팅
+- 체인 상태 라이프사이클: active → completed → notified → delivered
+
+## [0.3.0] — 2026-02-18
+
+### 정나무 (포크 시스템)
+
+- Copy-on-Fork: 같은 타임존에 여러 참여자 → 가지 분기
+- DB 스키마: `parent_chain_id`, `fork_slot`, `root_chain_id`
+- 시간 기반 완주: 루트 체인 시작 후 24h 자동 완료
+- 시뮬레이션 검증: 100유저 × 24TZ → 5개 루트, 274체인, 3,576블록
+- 포크 트리 시각화: `docs/jung-tree.html` (Canvas 애니메이션)
+
+### 온체인 기록
+
+- Base Sepolia 배포 (JungBlock + JungSoulbound)
+- `keccak256("jung-{chainId}")` 해시 기반 온체인 ID
+- 블록별 해시 기록 + 2초 딜레이 (nonce 안전)
+- 24블록 선형 테스트 통과
+
+## [0.2.0] — 2026-02-17
+
+### 다국어 지원 (17개 언어)
+
+- ko, en, ja, zh, th, es, pt, fr, ar, ru, de, it, tr, hi, id, vi, uk
+- 정 용어 현지화: ko=정, ja=情(じょう), en=정(Jung)
+- `tAsync()`: Gemini 자동 번역 + DB 캐시
+- 도시명 17개 언어 사전 번역 (`city_i18n` JSON)
+- 메뉴/버튼/알림 전체 i18n
+
+### UX 개선
+
+- /start와 /menu 완전 분리
+- 메뉴 콜백: `editMessageText` 우선, 빈 채팅 방지
+- /start 2초 디바운스 (텔레그램 중복 전송 방지)
+- 사진 타임스탬프 캡션 (YYYY.MM.DD HH:MM UTC+X)
+- 유저 커맨드 메시지 자동 삭제
+
+### 봇 아키텍처 전환
+
+- v5 레거시 코드 정리 (46개 파일 삭제)
+- 엔트리포인트: `src/index.ts` → `src/jung-bot.ts`
+- CDP 지갑 자동 생성 (비동기, `.then()` 패턴)
+- Gemini 2.0 Flash 통합 (검증/번역/STT)
+- 정지기(AI 모더레이터) 콘텐츠 검증 + 코멘트
+
 ## [0.1.1] — 2026-02-15
 
 ### 포토 릴레이 v2 (`live-relay-photo.ts`)
