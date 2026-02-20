@@ -30,6 +30,15 @@
 3. 나만의 사진 1장 + 캡션(200자)으로 정을 이어서 다음 타임존으로 전달
 4. 24시간 후 완주 → 온체인 기록 + 소울바운드 NFT 발급
 
+### 완주 앨범
+
+![완주 앨범](docs/album-showcase.png)
+
+### 포크 시뮬레이션
+
+![포크 트리 — 숲](docs/fork-forest.png)
+*시뮬레이션: 100유저 × 24 타임존 → 5개 루트에서 274개 체인, 3,576개 블록*
+
 ## 실행 방법
 
 ### 환경 설정
@@ -106,18 +115,9 @@ contracts/
 - **JungBlock**: [`0x4E2ff5f12EDa184992c66A2b9c015Bf4aB60D208`](https://sepolia.basescan.org/address/0x4E2ff5f12EDa184992c66A2b9c015Bf4aB60D208)
 - **JungSoulbound**: [`0xdCE1C45c52FE8227c2373A0D6a4C68cd397D4cb2`](https://sepolia.basescan.org/address/0xdCE1C45c52FE8227c2373A0D6a4C68cd397D4cb2)
 
-## 완주 앨범
-
-24시간 릴레이 완주 시 참여자 전원에게 소울바운드 NFT와 함께 앨범이 발급됩니다.
-
-![완주 앨범](docs/album-showcase.png)
-
 ## 포크 시스템
 
 같은 타임존에 이미 블록이 있으면 **Copy-on-Fork**로 체인이 분기됩니다. 각 포크는 부모 체인의 블록을 복사한 뒤 독립적으로 이어집니다.
-
-![포크 트리 — 숲](docs/fork-forest.png)
-*시뮬레이션: 100유저 × 24 타임존 → 5개 루트에서 274개 체인, 3,576개 블록*
 
 ## 다국어 지원
 
