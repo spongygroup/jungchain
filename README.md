@@ -70,7 +70,6 @@ npm run dev                      # 개발 모드 (hot reload)
 | 런타임 | TypeScript + Node.js (tsx) |
 | 봇 | Telegram (grammY) |
 | DB | SQLite (better-sqlite3) |
-| AI (스토리 생성) | Google Gemini 2.5 Pro |
 | AI (검증/번역/STT) | Google Gemini 2.0 Flash |
 | 온체인 | Base Sepolia (Coinbase CDP SDK) |
 | 스마트 컨트랙트 | Solidity (Hardhat) |
