@@ -5,6 +5,38 @@
 **정(情)**은 시간대를 따라 사진과 글이 릴레이되는 Telegram 봇입니다.
 매 정시, 한 사람의 사진 한 장과 짧은 글이 서쪽으로 다음 타임존의 누군가에게 전달됩니다. 24시간, 24개 타임존을 거쳐 지구를 한 바퀴 돌아 원래 보낸 사람에게 돌아옵니다.
 
+## 사용 방법
+
+1. Telegram에서 [@beanie_jungbot](https://t.me/beanie_jungbot) 시작
+2. `/start` — 봇 시작 + 위치 등록 (타임존 자동 감지)
+3. 내 타임존 차례가 오면 알림 수신
+4. 사진 1장 + 캡션(200자) 전송 → 다음 타임존으로 릴레이
+5. 24시간 후 지구를 한 바퀴 돌아 완주 → 온체인 기록 + 소울바운드 NFT 발급
+
+## 실행 방법
+
+### 환경 설정
+
+```bash
+cp .env.example .env
+```
+
+`.env` 파일에 필요한 키:
+
+```
+JUNG_BOT_TOKEN=           # Telegram 봇 토큰
+GOOGLE_API_KEY=           # Gemini (검증/번역)
+ENABLE_ONCHAIN=true       # 온체인 기록 활성화 (선택)
+```
+
+### 명령어
+
+```bash
+npm install
+npm run build && npm run start   # 프로덕션
+npm run dev                      # 개발 모드 (hot reload)
+```
+
 ## 컨셉
 
 한국어에만 있는 감정 **정(情)** — 시간이 쌓여야 생기는 깊은 유대감.
@@ -15,6 +47,15 @@
 - **포크 체인** — 같은 타임존에 여러 참여자 → Copy-on-Fork로 체인 분기
 - **온체인 기록** — 완주된 정은 Base L2에 영구 기록
 - **17개 언어 지원** — 각 타임존의 현지 언어로 자동 번역
+
+## 현재 상태
+
+- ✅ Telegram 봇 라이브 (@beanie_jungbot)
+- ✅ 사진+캡션 릴레이 (24개 타임존, 17개 언어)
+- ✅ 정지기 (AI 콘텐츠 검증 + 코멘트)
+- ✅ 포크 시스템 (시뮬레이션 검증: 100유저 × 24TZ → 269포크, 3,576블록)
+- ✅ 온체인 기록 (Base Sepolia, 24블록 선형 테스트 통과)
+- ✅ 소울바운드 NFT (情/정 배리언트 선택)
 
 ## 기술 스택
 
@@ -52,30 +93,6 @@ contracts/
 └── deployed.json         # 배포 주소 (Base Sepolia)
 ```
 
-## 실행 방법
-
-### 환경 설정
-
-```bash
-cp .env.example .env
-```
-
-`.env` 파일에 필요한 키:
-
-```
-JUNG_BOT_TOKEN=           # Telegram 봇 토큰
-GOOGLE_API_KEY=           # Gemini (검증/번역)
-ENABLE_ONCHAIN=true       # 온체인 기록 활성화 (선택)
-```
-
-### 명령어
-
-```bash
-npm install
-npm run build && npm run start   # 프로덕션
-npm run dev                      # 개발 모드 (hot reload)
-```
-
 ## 온체인
 
 - **네트워크**: Base Sepolia (chainId: 84532)
@@ -90,15 +107,6 @@ npm run dev                      # 개발 모드 (hot reload)
 
 17개 언어: 한국어, English, 日本語, 中文, ไทย, Español, Português, Français, العربية, Русский, Deutsch, Italiano, Türkçe, हिन्दी, Bahasa Indonesia, Tiếng Việt, Українська
 
-## 현재 상태
-
-- ✅ Telegram 봇 라이브 (@beanie_jungbot)
-- ✅ 사진+캡션 릴레이 (24개 타임존, 17개 언어)
-- ✅ 정지기 (AI 콘텐츠 검증 + 코멘트)
-- ✅ 포크 시스템 (시뮬레이션 검증: 100유저 × 24TZ → 269포크, 3,576블록)
-- ✅ 온체인 기록 (Base Sepolia, 24블록 선형 테스트 통과)
-- ✅ 소울바운드 NFT (情/정 배리언트 선택)
-
 ## HAB 프로토콜
 
 정은 합(HAB, Human + AI + Blockchain) 프로토콜의 첫 번째 체인입니다.
@@ -106,14 +114,6 @@ npm run dev                      # 개발 모드 (hot reload)
 - **정체인** — 감정·관계
 - **일체인** — 노동·협업
 - **장체인** — 거래·커머스
-
-## 사용 방법
-
-1. Telegram에서 [@beanie_jungbot](https://t.me/beanie_jungbot) 시작
-2. `/start` — 봇 시작 + 위치 등록 (타임존 자동 감지)
-3. 내 타임존 차례가 오면 알림 수신
-4. 사진 1장 + 캡션(200자) 전송 → 다음 타임존으로 릴레이
-5. 24시간 후 지구를 한 바퀴 돌아 완주 → 온체인 기록 + 소울바운드 NFT 발급
 
 ## 라이선스
 
