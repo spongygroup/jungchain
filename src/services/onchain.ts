@@ -1,6 +1,6 @@
 /**
- * 정체인 온체인 연동 — Base Sepolia (v6)
- * humanScore/isHuman 제거, timezoneOffset 추가
+ * 정체인 온체인 연동 — Base Sepolia (v7)
+ * humanScore/isHuman 제거, timezoneOffset 추가, variant (情/정) 지원
  */
 import { ethers } from 'ethers';
 import { readFileSync } from 'fs';
@@ -87,7 +87,7 @@ export async function recordBlock(
 }
 
 /**
- * Mint Soulbound NFT (v6: participantTz, slotNumber, chainLength)
+ * Mint Soulbound NFT (v7: participantTz, slotNumber, chainLength, variant)
  */
 export async function mintSoulbound(
   to: string,
@@ -95,10 +95,11 @@ export async function mintSoulbound(
   participantTz: number,
   chainLength: number,
   slotNumber: number,
+  variant: number = 0,
 ): Promise<{ tokenId: number; txHash: string }> {
-  console.log(`  🎖️ Minting Soulbound NFT for ${to.slice(0, 10)}...`);
+  console.log(`  🎖️ Minting Soulbound NFT for ${to.slice(0, 10)}... (variant=${variant})`);
 
-  const tx = await jungSoulbound.mint(to, chainId, participantTz, chainLength, slotNumber);
+  const tx = await jungSoulbound.mint(to, chainId, participantTz, chainLength, slotNumber, variant);
   const receipt = await tx.wait();
 
   const event = receipt.logs

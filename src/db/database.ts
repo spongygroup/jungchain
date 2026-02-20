@@ -185,6 +185,17 @@ export function markDelivered(chainId: number) {
   db.prepare("UPDATE chains SET status = 'delivered' WHERE id = ?").run(chainId);
 }
 
+export function markNotified(chainId: number) {
+  db.prepare("UPDATE chains SET status = 'notified' WHERE id = ?").run(chainId);
+}
+
+export function getStaleNotifiedChains(nowUtc: string): any[] {
+  return db.prepare(`
+    SELECT * FROM chains WHERE status = 'notified'
+    AND datetime(completed_at, '+24 hours') <= datetime(?)
+  `).all(nowUtc) as any[];
+}
+
 // ─── Blocks ───
 
 export function addBlock(

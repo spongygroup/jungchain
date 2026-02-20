@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/utils/Strings.sol";
 import "@openzeppelin/contracts/utils/Base64.sol";
 
 /**
- * @title JungSoulbound v6 — 정은 사고팔 수 없다
+ * @title JungSoulbound v7 — 정은 사고팔 수 없다
  * @notice Soulbound NFT for chain completers.
  *         Humans only. No humanScore — everyone who participated is equal.
  *         Non-transferable. Your 정 is yours alone.
@@ -19,6 +19,7 @@ contract JungSoulbound is ERC721 {
         int8 participantTz;
         uint16 chainLength;     // total blocks in completed chain
         uint16 slotNumber;      // this participant's position (1~24)
+        uint8 variant;          // 0 = 情 (hanja), 1 = 정 (hangul)
         uint256 completedAt;
     }
 
@@ -51,8 +52,10 @@ contract JungSoulbound is ERC721 {
         bytes32 chainId,
         int8 participantTz,
         uint16 chainLength,
-        uint16 slotNumber
+        uint16 slotNumber,
+        uint8 variant
     ) external onlyOperator returns (uint256 tokenId) {
+        require(variant <= 1, "invalid variant");
         tokenId = ++totalMinted;
 
         records[tokenId] = JungRecord({
@@ -60,6 +63,7 @@ contract JungSoulbound is ERC721 {
             participantTz: participantTz,
             chainLength: chainLength,
             slotNumber: slotNumber,
+            variant: variant,
             completedAt: block.timestamp
         });
 
@@ -87,11 +91,15 @@ contract JungSoulbound is ERC721 {
             tzStr = string(abi.encodePacked("UTC-", uint256(int256(-r.participantTz)).toString()));
         }
 
+        string memory jungChar = r.variant == 1
+            ? unicode"\uC815"   // 정 (hangul)
+            : unicode"\u60C5";  // 情 (hanja)
+
         string memory svg = string(abi.encodePacked(
             '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">',
             '<rect width="400" height="400" fill="#1a1a2e"/>',
             '<text x="200" y="120" text-anchor="middle" font-size="80" fill="#e94560">',
-            unicode'\u60C5',
+            jungChar,
             '</text>',
             '<text x="200" y="180" text-anchor="middle" font-size="20" fill="#eee" font-family="monospace">',
             'JUNG #', tokenId.toString(),

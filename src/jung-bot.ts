@@ -4,14 +4,15 @@
  * 모드: text | story | photo
  */
 import 'dotenv/config';
-import { Bot, InlineKeyboard, Keyboard } from 'grammy';
+import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy';
 import cron from 'node-cron';
 import { config, getCity, getFlag } from './config.js';
-import { t, resolveLang } from './services/i18n.js';
+import { t, tAsync, resolveLang } from './services/i18n.js';
 import { locationToOffset, reverseGeocode } from './services/geo.js';
 import { validatePhoto as aiValidatePhoto, validateText, translateContent } from './services/ai.js';
 import { sendText, deleteMessage, getPhotoBase64, getLargestPhotoId } from './services/telegram.js';
 import { makeChainId, recordBlock, mintSoulbound, createOnchainChain, explorerUrl } from './services/onchain.js';
+import { generateAlbumHtml } from './services/album.js';
 import { createWallet } from './services/wallet.js';
 import { ethers } from 'ethers';
 import db, {
@@ -21,7 +22,7 @@ import db, {
   createAssignment, getPendingAssignment, updateAssignment,
   getExpiredAssignments, findNextChainForUser,
   findAllChainsForUser, getChainsForTzAtHour, getUsersByTzOffset,
-  getChainsToDeliver, markDelivered,
+  getChainsToDeliver, markDelivered, markNotified, getStaleNotifiedChains,
   getUserNotifyHours, setUserNotifyHours, canChangeNotifyHours,
   incrementDailyStarts, getDailyStarts,
   blockExistsAtSlot, createForkChain, getExpiredActiveChains, getAllForksOfRoot,
@@ -162,22 +163,18 @@ function formatHour12(hour24: number): { ampm: string; hour12: number } {
 // ONBOARDING
 // ═══════════════════════════════════════
 
+const lastStartTime = new Map<number, number>();
 bot.command('start', async (ctx) => {
+  const userId = ctx.from!.id;
+  const now = Date.now();
+  if (now - (lastStartTime.get(userId) || 0) < 2000) {
+    try { await ctx.deleteMessage(); } catch {}
+    return;
+  }
+  lastStartTime.set(userId, now);
   const lang = getLang(ctx);
-  const name = ctx.from?.first_name ?? 'Friend';
   try { await ctx.deleteMessage(); } catch {}
-  await showMenu(ctx, lang, name);
-});
-
-// /menu command
-bot.command('menu', async (ctx) => {
-  const lang = getLang(ctx);
-  const name = ctx.from?.first_name ?? 'Friend';
-  try { await ctx.deleteMessage(); } catch {}
-  await showMenu(ctx, lang, name);
-});
-
-async function showMenu(ctx: any, lang: string, name: string) {
+  // /start: greeting + inline buttons (single message, no showMenu)
   const kb = new InlineKeyboard()
     .text(t(lang, 'btn_new_chain'), 'menu:new')
     .row()
@@ -186,7 +183,26 @@ async function showMenu(ctx: any, lang: string, name: string) {
     .text(t(lang, 'btn_notify_settings'), 'menu:notify')
     .row()
     .text(t(lang, 'btn_my_chains'), 'menu:mychains');
-  await ctx.reply('🌏 정(Jung) 메뉴', { reply_markup: kb });
+  await ctx.reply(t(lang, 'start_menu'), { reply_markup: kb });
+});
+
+// /menu command
+bot.command('menu', async (ctx) => {
+  const lang = getLang(ctx);
+  try { await ctx.deleteMessage(); } catch {}
+  await showMenu(ctx, lang, t(lang, 'menu_title'));
+});
+
+async function showMenu(ctx: any, lang: string, title: string) {
+  const kb = new InlineKeyboard()
+    .text(t(lang, 'btn_new_chain'), 'menu:new')
+    .row()
+    .text(t(lang, 'btn_arrived'), 'menu:arrived')
+    .row()
+    .text(t(lang, 'btn_notify_settings'), 'menu:notify')
+    .row()
+    .text(t(lang, 'btn_my_chains'), 'menu:mychains');
+  await ctx.reply(title, { reply_markup: kb });
 }
 
 // Track pending action before setup
@@ -272,7 +288,7 @@ bot.callbackQuery(/^confirm_loc:/, async (ctx) => {
   await ctx.answerCallbackQuery('🎉');
 
   // Show menu after setup
-  await showMenu(ctx, lang, from.first_name);
+  await showMenu(ctx, lang, t(lang, 'menu_title'));
 });
 
 // (hour picker removed — notify hour defaults to 9, changeable from menu)
@@ -331,7 +347,7 @@ bot.callbackQuery(/^devtz:/, async (ctx) => {
     t(lang, 'setup_done', { name: from.first_name, city, sign, offset, hour: defaultNotifyHour })
   );
   await ctx.answerCallbackQuery('🎉');
-  await showMenu(ctx, lang, from.first_name);
+  await showMenu(ctx, lang, t(lang, 'menu_title'));
 });
 
 // ═══════════════════════════════════════
@@ -343,31 +359,29 @@ const pendingNewChain = new Set<number>();
 
 bot.callbackQuery('menu:new', async (ctx) => {
   await ctx.answerCallbackQuery();
-  try { await ctx.deleteMessage(); } catch {}
   const lang = getLang(ctx);
   const user = getUser(ctx.from!.id);
-  if (!user) return requireSetup(ctx, lang, 'menu:new');
+  if (!user) { try { await ctx.deleteMessage(); } catch {} return requireSetup(ctx, lang, 'menu:new'); }
 
   // Daily start limit check (don't increment yet)
   const count = getDailyStarts(user.telegram_id);
   if (count >= config.maxDailyStarts) {
-    await ctx.reply(t(lang, 'daily_limit_reached', { max: config.maxDailyStarts }));
-    return showMenu(ctx, lang, ctx.from?.first_name ?? 'Friend');
+    try { await ctx.editMessageText(t(lang, 'daily_limit_reached', { max: config.maxDailyStarts })); } catch {}
+    return showMenu(ctx, lang, t(lang, 'menu_title'));
   }
 
   const city = user.city || getCity(user.tz_offset);
   const name = ctx.from?.first_name ?? 'Friend';
 
   pendingNewChain.add(ctx.from!.id);
-  await ctx.reply(t(lang, 'new_free', { city, name }));
+  try { await ctx.editMessageText(t(lang, 'new_free', { city, name })); } catch {}
 });
 
 bot.callbackQuery('menu:arrived', async (ctx) => {
   await ctx.answerCallbackQuery();
-  try { await ctx.deleteMessage(); } catch {}
   const lang = getLang(ctx);
   const user = getUser(ctx.from!.id);
-  if (!user) return requireSetup(ctx, lang, 'menu:arrived');
+  if (!user) { try { await ctx.deleteMessage(); } catch {} return requireSetup(ctx, lang, 'menu:arrived'); }
 
   // Get all pending assignments for this user (writing = already started, exclude)
   const assignments = db.prepare(
@@ -375,9 +389,10 @@ bot.callbackQuery('menu:arrived', async (ctx) => {
   ).all(ctx.from!.id) as any[];
 
   if (assignments.length === 0) {
-    await ctx.reply(t(lang, 'no_arrived'));
-    return showMenu(ctx, lang, ctx.from?.first_name ?? 'Friend');
+    try { await ctx.editMessageText(t(lang, 'no_arrived')); } catch {}
+    return showMenu(ctx, lang, t(lang, 'menu_title'));
   }
+  try { await ctx.deleteMessage(); } catch {}
 
   // Send header (same logic as rollNextChain)
   const now = new Date();
@@ -399,18 +414,18 @@ bot.callbackQuery('menu:arrived', async (ctx) => {
 
 bot.callbackQuery('menu:notify', async (ctx) => {
   await ctx.answerCallbackQuery();
-  try { await ctx.deleteMessage(); } catch {}
   const lang = getLang(ctx);
   const user = getUser(ctx.from!.id);
-  if (!user) return requireSetup(ctx, lang, 'menu:notify');
+  if (!user) { try { await ctx.deleteMessage(); } catch {} return requireSetup(ctx, lang, 'menu:notify'); }
 
   if (!canChangeNotifyHours(user.telegram_id)) {
     const currentHours = getUserNotifyHours(user.telegram_id);
     const hourStr = currentHours.length > 0
       ? currentHours.map(h => `${String(h).padStart(2, '0')}:00`).join(', ')
       : '-';
+    try { await ctx.deleteMessage(); } catch {}
     await ctx.reply(t(lang, 'notify_hours_cooldown_with_current', { hours: hourStr }));
-    return showMenu(ctx, lang, ctx.from?.first_name ?? 'Friend');
+    return showMenu(ctx, lang, t(lang, 'menu_title'));
   }
 
   await showNotifyHoursGrid(ctx, user.telegram_id, lang);
@@ -418,10 +433,11 @@ bot.callbackQuery('menu:notify', async (ctx) => {
 
 bot.callbackQuery('menu:mychains', async (ctx) => {
   await ctx.answerCallbackQuery();
-  try { await ctx.deleteMessage(); } catch {}
   const lang = getLang(ctx);
   const user = getUser(ctx.from!.id);
-  if (!user) return requireSetup(ctx, lang, 'menu:mychains');
+  if (!user) { try { await ctx.deleteMessage(); } catch {} return requireSetup(ctx, lang, 'menu:mychains'); }
+
+  try { await ctx.deleteMessage(); } catch {}
 
   // Get all chains created by this user (active + completed)
   const myChains = db.prepare(
@@ -430,7 +446,7 @@ bot.callbackQuery('menu:mychains', async (ctx) => {
 
   if (myChains.length === 0) {
     await ctx.reply(t(lang, 'my_chains_empty', { name: user.first_name ?? ctx.from?.first_name }));
-    return showMenu(ctx, lang, ctx.from?.first_name ?? 'Friend');
+    return showMenu(ctx, lang, t(lang, 'menu_title'));
   }
 
   const activeChains = myChains.filter(c => c.status === 'active');
@@ -441,8 +457,9 @@ bot.callbackQuery('menu:mychains', async (ctx) => {
   if (activeChains.length > 0) {
     text += t(lang, 'my_chains_active_section');
     for (const chain of activeChains) {
-      const lastBlock = getLastBlock(chain.id);
-      const count = lastBlock?.slot_index ?? 0;
+      const startUtc = new Date(chain.start_utc);
+      const elapsedHours = (Date.now() - startUtc.getTime()) / (1000 * 60 * 60);
+      const count = Math.min(Math.floor(elapsedHours), 24);
       const createdAt = new Date(chain.created_at + 'Z');
       const localCreated = new Date(createdAt.getTime() + user.tz_offset * 60 * 60 * 1000);
       const m = localCreated.getUTCMonth() + 1;
@@ -487,7 +504,37 @@ bot.callbackQuery('menu:mychains', async (ctx) => {
   }
 
   await ctx.reply(text);
-  await showMenu(ctx, lang, ctx.from?.first_name ?? 'Friend');
+  await showMenu(ctx, lang, t(lang, 'menu_title'));
+});
+
+// ═══════════════════════════════════════
+// NFT STYLE CHOICE CALLBACK
+// ═══════════════════════════════════════
+
+bot.callbackQuery(/^nft:/, async (ctx) => {
+  const parts = ctx.callbackQuery.data.split(':');
+  const chainId = Number(parts[1]);
+  const variant = Number(parts[2]); // 0 = 情, 1 = 정
+  const lang = getLang(ctx);
+
+  const chain = getChain(chainId);
+  if (!chain || chain.status === 'delivered') {
+    await ctx.answerCallbackQuery(t(lang, 'nft_minted').split('\n')[0]);
+    return;
+  }
+
+  // Remove buttons
+  try { await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }); } catch {}
+  await ctx.answerCallbackQuery(variant === 1 ? '정 ✓' : '情 ✓');
+
+  try {
+    await mintCompletionNFT(chainId, variant);
+    await sendAlbum(chainId, variant);
+    markDelivered(chainId);
+    console.log(`  🎖️ NFT minted for chain #${chainId} (variant=${variant})`);
+  } catch (e) {
+    console.error(`  🎖️ NFT callback mint failed for chain #${chainId}:`, e);
+  }
 });
 
 // ═══════════════════════════════════════
@@ -569,7 +616,7 @@ bot.callbackQuery('nhr:done', async (ctx) => {
 
   await ctx.editMessageText(t(lang, 'notify_hours_saved'));
   await ctx.answerCallbackQuery();
-  await showMenu(ctx, lang, ctx.from?.first_name ?? 'Friend');
+  await showMenu(ctx, lang, t(lang, 'menu_title'));
 });
 
 // ═══════════════════════════════════════
@@ -977,16 +1024,37 @@ cron.schedule('0 * * * *', async () => {
     console.log(`  ⏰ Time-expired chain #${chain.id} (${getBlockCount(chain.id)} blocks)`);
   }
 
-  // 2) 완주된 체인 결과 전달 (chain_hour + 24h 지난 것)
+  // 2) 완주된 체인 결과 전달 + NFT 스타일 선택 요청
   const toDeliver = getChainsToDeliver(now.toISOString());
   for (const chain of toDeliver) {
     try {
       await notifyChainComplete(chain.id);
-      mintCompletionNFT(chain.id).catch(() => {});
-      markDelivered(chain.id);
-      console.log(`  📬 Delivered chain #${chain.id} result to creator`);
+      if (ENABLE_ONCHAIN) {
+        await sendNftStyleChoice(chain.id);
+        markNotified(chain.id);
+        console.log(`  📬 Notified chain #${chain.id}, awaiting NFT style choice`);
+      } else {
+        await sendAlbum(chain.id, 0);
+        markDelivered(chain.id);
+        console.log(`  📬 Delivered chain #${chain.id} (on-chain disabled)`);
+      }
     } catch (e) {
       console.error(`  ❌ Failed to deliver chain #${chain.id}:`, e);
+    }
+  }
+
+  // 2.5) 24시간 미선택 체인 자동 민팅 (기본값 情)
+  if (ENABLE_ONCHAIN) {
+    const staleNotified = getStaleNotifiedChains(now.toISOString());
+    for (const chain of staleNotified) {
+      try {
+        await mintCompletionNFT(chain.id, 0);
+        await sendAlbum(chain.id, 0);
+        markDelivered(chain.id);
+        console.log(`  🎖️ Auto-minted NFT for stale chain #${chain.id} (default 情)`);
+      } catch (e) {
+        console.error(`  🎖️ Auto-mint failed for chain #${chain.id}:`, e);
+      }
     }
   }
 
@@ -1204,7 +1272,40 @@ async function recordBlockOnchain(chainId: number, content: string, tzOffset: nu
   }
 }
 
-async function mintCompletionNFT(chainId: number) {
+async function sendNftStyleChoice(chainId: number) {
+  const chain = getChain(chainId);
+  if (!chain) return;
+  const creator = getUser(chain.creator_id);
+  if (!creator) return;
+  const lang = creator?.lang ?? 'en';
+
+  const kb = new InlineKeyboard()
+    .text('情 한자', `nft:${chainId}:0`)
+    .text('정 한글', `nft:${chainId}:1`);
+
+  await sendText(bot, chain.creator_id,
+    t(lang, 'nft_style_choice'),
+    { reply_markup: kb }
+  );
+}
+
+async function sendAlbum(chainId: number, variant: number) {
+  try {
+    const chain = getChain(chainId);
+    if (!chain) return;
+    const creator = getUser(chain.creator_id);
+    const lang = creator?.lang ?? 'en';
+    const albumBuffer = await generateAlbumHtml(bot, chainId, variant, lang);
+    const albumFile = new InputFile(albumBuffer, `jung-chain-${chainId}.html`);
+    const caption = await tAsync(lang, 'album_sent', { chainId });
+    await bot.api.sendDocument(chain.creator_id, albumFile, { caption });
+    console.log(`  📖 Album sent for chain #${chainId}`);
+  } catch (e: any) {
+    console.error(`  📖 Album failed for chain #${chainId}: ${e.message}`);
+  }
+}
+
+async function mintCompletionNFT(chainId: number, variant: number = 0) {
   if (!ENABLE_ONCHAIN) return;
   try {
     const chain = getChain(chainId);
@@ -1217,7 +1318,7 @@ async function mintCompletionNFT(chainId: number) {
     const mintTo = creator?.wallet_address || process.env.DEPLOYER_ADDRESS || ethers.ZeroAddress;
 
     const { tokenId, txHash } = await mintSoulbound(
-      mintTo, onchainId, chain.creator_tz, blocks.length, 1
+      mintTo, onchainId, chain.creator_tz, blocks.length, 1, variant
     );
 
     const lang = creator?.lang ?? 'en';
