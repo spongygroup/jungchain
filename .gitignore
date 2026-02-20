@@ -20,6 +20,8 @@ data/nft-preview.*
 data/wallets.json
 data/build-html.cjs
 
+docs/security-audit-*.md
+
 artifacts/
 cache/
 

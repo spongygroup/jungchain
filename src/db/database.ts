@@ -222,6 +222,11 @@ export function getAllBlocks(chainId: number): any[] {
   return db.prepare('SELECT * FROM blocks WHERE chain_id = ? ORDER BY slot_index ASC').all(chainId) as any[];
 }
 
+export function isChainParticipant(chainId: number, userId: number): boolean {
+  const row = db.prepare('SELECT 1 FROM blocks WHERE chain_id = ? AND user_id = ? LIMIT 1').get(chainId, userId);
+  return !!row;
+}
+
 // ─── Fork ───
 
 export function blockExistsAtSlot(chainId: number, slotIndex: number): boolean {

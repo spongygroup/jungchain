@@ -26,6 +26,7 @@ import db, {
   getUserNotifyHours, setUserNotifyHours, canChangeNotifyHours,
   incrementDailyStarts, getDailyStarts,
   blockExistsAtSlot, createForkChain, getExpiredActiveChains, getAllForksOfRoot,
+  isChainParticipant,
 } from './db/database.js';
 
 // ─── Bot Init ───
@@ -298,6 +299,7 @@ bot.callbackQuery(/^confirm_loc:/, async (ctx) => {
 // ═══════════════════════════════════════
 
 bot.command('devstart', async (ctx) => {
+  if (ctx.from!.id !== Number(process.env.JUNG_ADMIN_CHAT_ID)) return;
   try { await ctx.deleteMessage(); } catch {}
   const lang = getLang(ctx);
   const kb = new InlineKeyboard();
@@ -517,6 +519,9 @@ bot.callbackQuery(/^nft:/, async (ctx) => {
   const variant = Number(parts[2]); // 0 = 情, 1 = 정
   const lang = getLang(ctx);
 
+  if (isNaN(chainId) || isNaN(variant) || variant < 0 || variant > 1) return ctx.answerCallbackQuery('❌');
+  if (!isChainParticipant(chainId, ctx.from!.id)) return ctx.answerCallbackQuery('❌');
+
   const chain = getChain(chainId);
   if (!chain || chain.status === 'delivered') {
     await ctx.answerCallbackQuery(t(lang, 'nft_minted').split('\n')[0]);
@@ -717,9 +722,11 @@ bot.callbackQuery(/^write:/, async (ctx) => {
   const lang = getLang(ctx);
   const userId = ctx.from!.id;
 
+  if (isNaN(assignmentId)) return ctx.answerCallbackQuery('❌');
+
   // Find the assignment by ID and mark as writing
   const assignment = db.prepare('SELECT * FROM assignments WHERE id = ?').get(assignmentId) as any;
-  if (!assignment) return ctx.answerCallbackQuery('❌');
+  if (!assignment || assignment.user_id !== userId) return ctx.answerCallbackQuery('❌');
   updateAssignment(assignment.id, 'writing');
 
   const wpMsg = await ctx.reply(t(lang, 'write_prompt', { slot: assignment.slot_index, max: config.maxMessageLength }));
@@ -734,6 +741,11 @@ bot.callbackQuery(/^skip:/, async (ctx) => {
   const assignmentId = Number(parts[1]);
   const lang = getLang(ctx);
   const userId = ctx.from!.id;
+
+  if (isNaN(assignmentId)) return ctx.answerCallbackQuery('❌');
+
+  const assignment = db.prepare('SELECT * FROM assignments WHERE id = ?').get(assignmentId) as any;
+  if (!assignment || assignment.user_id !== userId) return ctx.answerCallbackQuery('❌');
 
   // Delete previous arrival messages
   await deleteArrivalMessages(userId);
