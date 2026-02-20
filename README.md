@@ -92,7 +92,7 @@ npm test
 
 - **네트워크**: Base Sepolia (chainId: 84532)
 - **JungBlock**: [`0x4E2ff5f12EDa184992c66A2b9c015Bf4aB60D208`](https://sepolia.basescan.org/address/0x4E2ff5f12EDa184992c66A2b9c015Bf4aB60D208)
-- **JungSoulbound**: [`0x33D52808224E570d6e98f3CBaD8bC59a43A67fc1`](https://sepolia.basescan.org/address/0x33D52808224E570d6e98f3CBaD8bC59a43A67fc1)
+- **JungSoulbound**: [`0xdCE1C45c52FE8227c2373A0D6a4C68cd397D4cb2`](https://sepolia.basescan.org/address/0xdCE1C45c52FE8227c2373A0D6a4C68cd397D4cb2)
 
 ## 포크 시스템
 
@@ -116,13 +116,8 @@ npm test
 - ✅ 포토 릴레이 + AI 사진 검증
 - ✅ 포크 시스템 (시뮬레이션 검증: 100유저 × 24TZ → 269포크, 3,576블록)
 - ✅ 온체인 기록 (Base Sepolia, 24블록 선형 테스트 통과)
-- ✅ 소울바운드 NFT 컨트랙트 배포
+- ✅ 소울바운드 NFT 컨트랙트 배포 (v7, 情/정 배리언트 선택)
 - ✅ 다국어 지원 (17개 언어, 도시명 사전 번역)
-
-## 문서
-
-- [`docs/jung-overview.md`](./docs/jung-overview.md) — 프로젝트 개요
-- [`docs/vibelabs-submission.md`](./docs/vibelabs-submission.md) — Vibelabs 제출
 
 ## 라이선스
 
