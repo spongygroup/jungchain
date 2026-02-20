@@ -1,6 +1,9 @@
 #!/bin/bash
 # 정봇 헬스체크 — 1시간마다 실행, 결과를 텔레그램으로 전송
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/../.env" 2>/dev/null
+
 BOT_TOKEN="${JUNG_BOT_TOKEN:?JUNG_BOT_TOKEN not set}"
 CHAT_ID="${JUNG_ADMIN_CHAT_ID:-5023569703}"
 LOG_FILE="/private/tmp/jung-bot.log"

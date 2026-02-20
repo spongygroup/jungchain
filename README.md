@@ -70,7 +70,8 @@ npm run dev                      # 개발 모드 (hot reload)
 | 런타임 | TypeScript + Node.js (tsx) |
 | 봇 | Telegram (grammY) |
 | DB | SQLite (better-sqlite3) |
-| AI (검증/번역) | Google Gemini 2.5 Flash |
+| AI (스토리 생성) | Google Gemini 2.5 Pro |
+| AI (검증/번역/STT) | Google Gemini 2.0 Flash |
 | 온체인 | Base Sepolia (Coinbase CDP SDK) |
 | 스마트 컨트랙트 | Solidity (Hardhat) |
 | 타임존 | geo-tz + Luxon |
@@ -87,6 +88,7 @@ src/
 │   └── schema.sql        # 테이블 스키마
 └── services/
     ├── ai.ts             # AI 서비스 (검증/번역/STT)
+    ├── album.ts          # 완주 앨범 HTML 동적 생성
     ├── geo.ts            # 지오코딩 (Nominatim)
     ├── i18n.ts           # 다국어 지원 (17개 언어)
     ├── onchain.ts        # 온체인 기록 (Base Sepolia)
