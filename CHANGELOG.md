@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.1] — 2026-02-20
+
+### 보안
+
+- AI 검증 이중 폴백: Gemini → OpenAI gpt-4o-mini (텍스트/사진 모두)
+- 프롬프트 인젝션 방어: `<USER_CONTENT>` / `<MISSION>` 구조화 태그
+- `/devstart` 관리자 전용 guard (`JUNG_ADMIN_CHAT_ID`)
+- 콜백 소유권 검증: `isChainParticipant()`, `assignment.user_id` 체크
+- 콜백 NaN/범위 검증 (variant 0~1)
+- CDP 인증 경로 환경변수 오버라이드 (`CDP_CREDENTIALS_PATH`) + 권한 검증
+- `.env`, `wallets.json` 파일 권한 강화 (chmod 600)
+- 컨트랙트 v8: `transferOperator` + `acceptOperator` 2단계 키 로테이션
+- 보안 감사 문서 gitignore 처리
+
 ## [0.4.0] — 2026-02-20
 
 ### 완주 앨범
