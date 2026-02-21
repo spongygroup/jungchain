@@ -242,12 +242,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; t
   border-radius: 16px;
   overflow: hidden;
   max-width: 500px;
+  max-height: 90vh;
   width: 100%;
-  margin: 0 auto;
+  margin: auto;
   position: relative;
   animation: lbIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
 }
+.lb-card img { width: 100%; display: block; flex-shrink: 0; max-height: 60vh; object-fit: cover; }
+.lb-card .info { padding: 1rem 1.2rem; overflow-y: auto; }
 .lb-card .num {
   position: absolute;
   top: 12px; left: 12px;
@@ -258,8 +263,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; t
   border-radius: 100px;
   z-index: 2;
 }
-.lb-card img { width: 100%; display: block; }
-.lb-card .info { padding: 1rem 1.2rem; }
 .lb-card .city-row {
   display: flex;
   justify-content: space-between;
