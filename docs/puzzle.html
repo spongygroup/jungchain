@@ -424,6 +424,49 @@ var PIECES = [{"id":0,"city":"🇰🇷 Seoul","sticker":"data:image/png;base64,i
     });
   }
 
+  function repositionPieces() {
+    var fr = field.getBoundingClientRect();
+    var W = fr.width, H = fr.height;
+    if (W === 0 || H === 0) return;
+
+    if (drag) { resetDrag(); }
+
+    var curMobile = window.matchMedia('(pointer: coarse)').matches && window.innerWidth < 768;
+    var pieceSize = curMobile ? Math.min(90, Math.floor(W / 5)) : Math.min(140, Math.floor(W / 7));
+    var floatRange = 16;
+    var pieceH = Math.round(pieceSize * 1.4);
+
+    var items = [];
+    Object.keys(curEls).forEach(function(key) {
+      var el = curEls[key];
+      if (!el || el.classList.contains('matched')) return;
+      items.push(el);
+    });
+    if (items.length === 0) return;
+
+    var cols = Math.floor(W / (pieceSize + 8));
+    var rows = Math.ceil(items.length / cols);
+    var cellW = W / cols;
+    var cellH = H / Math.max(rows, 1);
+
+    items.forEach(function(el, i) {
+      var col = i % cols, row = Math.floor(i / cols);
+      el.style.width = pieceSize + 'px';
+      var maxX = W - pieceSize - 4;
+      var maxY = H - pieceH - floatRange;
+      var cx = col * cellW + 0.2 * cellW;
+      var cy = row * cellH + 0.2 * cellH;
+      el.style.left = Math.max(4, Math.min(cx, maxX)) + 'px';
+      el.style.top = Math.max(floatRange, Math.min(cy, maxY)) + 'px';
+    });
+  }
+
+  var resizeTimer;
+  window.addEventListener('resize', function() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(repositionPieces, 200);
+  });
+
   function startRound() {
     var start = roundIdx * BATCH;
     var ids = order.slice(start, start + BATCH);
