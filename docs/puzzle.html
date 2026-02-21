@@ -434,8 +434,7 @@ var PIECES = [{"id":0,"city":"🇰🇷 Seoul","sticker":"data:image/png;base64,i
 
     if (drag) { resetDrag(); }
 
-    var curMobile = window.matchMedia('(pointer: coarse)').matches && window.innerWidth < 768;
-    var pieceSize = curMobile ? Math.min(90, Math.floor(W / 5)) : Math.min(140, Math.floor(W / 7));
+    var pieceSize = isMobile ? Math.min(90, Math.floor(W / 5)) : Math.min(140, Math.floor(W / 7));
     var floatRange = 16;
     var pieceH = Math.round(pieceSize * 1.4);
 
