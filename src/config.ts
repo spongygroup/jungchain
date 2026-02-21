@@ -19,10 +19,10 @@ export const config = {
 // Timezone offset → representative city name
 export const TZ_CITIES: Record<number, string> = {
   12: 'Auckland',
-  11: 'Solomon Islands',
+  11: 'Honiara',
   10: 'Sydney',
-  9: 'Seoul/Tokyo',
-  8: 'Shanghai/Taipei',
+  9: 'Seoul',
+  8: 'Shanghai',
   7: 'Bangkok',
   6: 'Dhaka',
   5: 'Karachi',
@@ -32,7 +32,7 @@ export const TZ_CITIES: Record<number, string> = {
   1: 'Paris',
   0: 'London',
   '-1': 'Azores',
-  '-2': 'Mid-Atlantic',
+  '-2': 'Noronha',
   '-3': 'São Paulo',
   '-4': 'New York',
   '-5': 'Chicago',

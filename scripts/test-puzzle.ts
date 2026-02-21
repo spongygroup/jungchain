@@ -3,14 +3,7 @@ import sharp from 'sharp';
 import { readFileSync, writeFileSync, readdirSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
-import { TZ_FLAGS } from '../src/config.js';
-
-const CITY_OVERRIDES: Record<string, string> = {
-  'Seoul-Tokyo': 'Seoul',
-  'Shanghai-Taipei': 'Shanghai',
-  'Mid-Atlantic': 'Noronha',
-  'Solomon Islands': 'Honiara',
-};
+import { TZ_FLAGS, getCity } from '../src/config.js';
 
 const PHOTO_DIR = 'data/relay-photos/2026-02-15T13-03-13';
 const CUTOUT_DIR = 'data/stickers-test';
@@ -46,9 +39,9 @@ for (const f of photos) {
     offset = meta.offset ?? 0;
   } catch {}
 
-  // City name with flag emoji
+  // City name with flag emoji (use config as source of truth)
   const flag = TZ_FLAGS[offset] ?? '🌍';
-  const displayCity = CITY_OVERRIDES[city] ?? city;
+  const displayCity = getCity(offset);
   const cityWithFlag = `${flag} ${displayCity}`;
 
   const origMeta = await sharp(original).metadata();
