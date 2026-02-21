@@ -5,6 +5,13 @@ import { join } from 'path';
 import { execSync } from 'child_process';
 import { TZ_FLAGS } from '../src/config.js';
 
+const CITY_OVERRIDES: Record<string, string> = {
+  'Seoul-Tokyo': 'Seoul',
+  'Shanghai-Taipei': 'Shanghai',
+  'Mid-Atlantic': 'Noronha',
+  'Solomon Islands': 'Honiara',
+};
+
 const PHOTO_DIR = 'data/relay-photos/2026-02-15T13-03-13';
 const CUTOUT_DIR = 'data/stickers-test';
 
@@ -41,7 +48,8 @@ for (const f of photos) {
 
   // City name with flag emoji
   const flag = TZ_FLAGS[offset] ?? '🌍';
-  const cityWithFlag = `${flag} ${city}`;
+  const displayCity = CITY_OVERRIDES[city] ?? city;
+  const cityWithFlag = `${flag} ${displayCity}`;
 
   const origMeta = await sharp(original).metadata();
 
@@ -723,7 +731,7 @@ ${CSS}
 </style>
 </head>
 <body>
-<div id="header"><span id="title">정 퍼즐</span><span class="dot">·</span><span id="score">0/${pieces.length}</span><span class="dot">·</span><span id="round"></span></div>
+<div id="header"><span id="title">정(情) 퍼즐</span><span class="dot">·</span><span id="score">0/${pieces.length}</span><span class="dot">·</span><span id="round"></span></div>
 <div id="field"></div>
 <div id="reveal">
   <img id="reveal-img" src="">
