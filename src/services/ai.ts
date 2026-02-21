@@ -182,6 +182,51 @@ export async function validatePhoto(
   }
 }
 
+// ─── Identify main subject in photo (for SAM3 segmentation) ───
+
+export async function identifySubjects(photoBase64: string, caption?: string): Promise<string[]> {
+  try {
+    const model = getModel('gemini-2.0-flash');
+    const captionHint = caption ? `\nThe photographer's caption: "${caption}"` : '';
+    const prompt = `Look at this photo and identify the objects to segment out as one sticker.${captionHint}
+
+List the main subject FIRST, then its container or utensils if relevant.
+Each item should be 1-3 simple English words that SAM3 can understand.
+Return as comma-separated list. Max 2-3 items.
+
+Rules:
+- NEVER include hands, fingers, arms, or any body parts
+- NEVER include background elements (wall, floor, grass, table, counter)
+- If food: include the plate/bowl/dish it sits on
+- If drink: include the glass/cup/can (as one item)
+- If a utensil (spoon, fork) is IN the food/dish, include it
+- If a standalone object (postbox, hydrant, bike): just that object alone
+
+Examples:
+- Jam jar with spoon → "jam jar, spoon"
+- Soup in a bowl → "soup bowl, spoon"
+- Hand holding a bottle → "sauce bottle" (no hand!)
+- Fire hydrant → "fire hydrant"
+- Salmon on plate → "salmon, plate"
+- Red stool → "red stool"`;
+    const result = await model.generateContent({
+      contents: [{
+        role: 'user',
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType: 'image/jpeg', data: photoBase64 } },
+        ],
+      }],
+    });
+    const raw = result.response.text().trim().toLowerCase().replace(/[."']/g, '');
+    const items = raw.split(',').map(s => s.trim()).filter(s => s.length > 0 && s.length < 40);
+    return items.length > 0 ? items : ['object'];
+  } catch (e: any) {
+    console.warn(`⚠️ identifySubjects failed: ${e.message}`);
+    return ['object'];
+  }
+}
+
 // ─── Generate photo via Imagen 4 ───
 export async function generatePhoto(
   prompt: string,

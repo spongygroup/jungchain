@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@coinbase/cdp-sdk": "^1.44.1",
+    "@fal-ai/client": "^1.9.3",
     "@google/generative-ai": "^0.24.1",
     "@resvg/resvg-js": "^2.6.2",
     "better-sqlite3": "^11.8.1",
